@@ -1,8 +1,8 @@
-# SwiftBLEKit Design
+# ArcBLEKit Design
 
 ## Summary
 
-SwiftBLEKit is a Swift Package for building iOS BLE central apps with a modern Swift Concurrency API. The first version targets Swift 5.5+ and iOS 14.0+, wraps CoreBluetooth behind a small public API, and provides both low-friction scanning and a per-device session layer.
+ArcBLEKit is a Swift Package for building iOS BLE central apps with a modern Swift Concurrency API. The first version targets Swift 5.5+ and iOS 14.0+, wraps CoreBluetooth behind a small public API, and provides both low-friction scanning and a per-device session layer.
 
 The library focuses on generic BLE client behavior: scan, find, connect, reconnect by saved peripheral identifier, discover services and characteristics, read, write, subscribe to notifications, disconnect, track connection state, and perform limited foreground automatic reconnects.
 
@@ -30,11 +30,11 @@ The library focuses on generic BLE client behavior: scan, find, connect, reconne
 
 ## Package Shape
 
-The package name is `SwiftBLEKit`.
+The package name is `ArcBLEKit`.
 
 ```text
 Package.swift
-Sources/SwiftBLEKit/
+Sources/ArcBLEKit/
   BLEClient.swift
   BLEClient+Scan.swift
   BLEClient+Reconnect.swift
@@ -53,7 +53,7 @@ Sources/SwiftBLEKit/
     AsyncOperationStore.swift
     CharacteristicCache.swift
     BLEAdvertisementParser.swift
-Tests/SwiftBLEKitTests/
+Tests/ArcBLEKitTests/
   BLEClientScanTests.swift
   BLEClientReconnectTests.swift
   PeripheralSessionOperationTests.swift
@@ -65,7 +65,7 @@ Tests/SwiftBLEKitTests/
 
 ## Architecture
 
-SwiftBLEKit uses a three-layer architecture.
+ArcBLEKit uses a three-layer architecture.
 
 ### Public API Layer
 
@@ -425,4 +425,4 @@ The repository should include a README with:
 
 ## Naming
 
-The implementation plan will use `SwiftBLEKit` as the package and module name unless the user requests a rename before implementation starts.
+The implementation plan will use `ArcBLEKit` as the package and module name.
