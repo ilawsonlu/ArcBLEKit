@@ -11,6 +11,7 @@ final class FakeCentralManager: CentralManaging {
     var onDisconnect: ((PeripheralRepresenting, Error?) -> Void)?
 
     private(set) var scannedServiceUUIDs: [CBUUID]?
+    private(set) var scanForPeripheralsCallCount = 0
     private(set) var didStopScan = false
     private(set) var stopScanCallCount = 0
     private(set) var retrievedIdentifiers: [UUID] = []
@@ -23,6 +24,7 @@ final class FakeCentralManager: CentralManaging {
     }
 
     func scanForPeripherals(withServices services: [CBUUID]?) {
+        scanForPeripheralsCallCount += 1
         scannedServiceUUIDs = services
         didStopScan = false
     }
