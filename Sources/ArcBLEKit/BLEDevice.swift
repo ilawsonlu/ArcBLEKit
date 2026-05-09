@@ -1,4 +1,8 @@
+#if compiler(>=5.6)
 @preconcurrency import CoreBluetooth
+#else
+import CoreBluetooth
+#endif
 import Foundation
 
 public struct BLEDevice: Identifiable, Equatable, Sendable {
