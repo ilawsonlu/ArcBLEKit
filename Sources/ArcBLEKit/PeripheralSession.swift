@@ -5,6 +5,8 @@ public final class PeripheralSession {
     let peripheral: PeripheralRepresenting
     let central: CentralManaging
     let options: ConnectionOptions
+    let characteristicCache = CharacteristicCache()
+    let operationQueue = SessionOperationQueue()
 
     private let stateContinuation: AsyncStream<ConnectionState>.Continuation
     public let connectionStates: AsyncStream<ConnectionState>
