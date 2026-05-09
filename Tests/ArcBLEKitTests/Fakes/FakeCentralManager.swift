@@ -36,7 +36,7 @@ final class FakeCentralManager: CentralManaging {
 
     func retrievePeripherals(withIdentifiers identifiers: [UUID]) -> [PeripheralRepresenting] {
         retrievedIdentifiers = identifiers
-        return retrievedPeripherals
+        return retrievedPeripherals.filter { identifiers.contains($0.identifier) }
     }
 
     func connect(_ peripheral: PeripheralRepresenting) {

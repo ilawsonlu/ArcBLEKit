@@ -46,32 +46,55 @@ public extension BLEClient {
             throw BLEError.scanTimedOut
         }
 
-        let stream = scan(filter: filter)
+        let scanID = UUID()
+        let stream = AsyncStream<BLEDevice> { continuation in
+            startScan(id: scanID, filter: filter, continuation: continuation)
+            continuation.onTermination = { [weak self] _ in
+                guard let self else { return }
+                self.finishScan(id: scanID)
+            }
+        }
         let attempt = FindDeviceAttempt()
+        let cancellation = CancellationHandlerBox()
 
-        return try await withCheckedThrowingContinuation { continuation in
-            var scanTask: Task<Void, Never>?
-            var timeoutTask: Task<Void, Never>?
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                var scanTask: Task<Void, Never>?
+                var timeoutTask: Task<Void, Never>?
 
-            scanTask = Task {
-                let device = await firstDevice(in: stream)
-                attempt.finish {
-                    timeoutTask?.cancel()
-                    if let device {
-                        continuation.resume(returning: device)
-                    } else {
+                scanTask = Task {
+                    let device = await firstDevice(in: stream)
+                    attempt.finish {
+                        timeoutTask?.cancel()
+                        self.finishScan(id: scanID)
+                        if let device {
+                            continuation.resume(returning: device)
+                        } else {
+                            continuation.resume(throwing: BLEError.scanTimedOut)
+                        }
+                    }
+                }
+
+                timeoutTask = Task {
+                    try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                    attempt.finish {
+                        scanTask?.cancel()
+                        self.finishScan(id: scanID)
                         continuation.resume(throwing: BLEError.scanTimedOut)
                     }
                 }
-            }
 
-            timeoutTask = Task {
-                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
-                attempt.finish {
-                    scanTask?.cancel()
-                    continuation.resume(throwing: BLEError.scanTimedOut)
+                cancellation.set {
+                    attempt.finish {
+                        scanTask?.cancel()
+                        timeoutTask?.cancel()
+                        self.finishScan(id: scanID)
+                        continuation.resume(throwing: BLEError.operationCancelled)
+                    }
                 }
             }
+        } onCancel: {
+            cancellation.cancel()
         }
     }
 

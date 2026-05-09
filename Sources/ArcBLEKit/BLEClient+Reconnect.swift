@@ -69,44 +69,72 @@ public extension BLEClient {
 
         let connectionID = UUID()
         let attempt = ConnectionAttempt()
+        let cancellation = CancellationHandlerBox()
 
-        return try await withCheckedThrowingContinuation { continuation in
-            var timeoutTask: Task<Void, Never>?
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                var timeoutTask: Task<Void, Never>?
 
-            timeoutTask = Task {
-                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
-                attempt.finish {
-                    guard self.finishConnection(id: connectionID, cancelling: peripheral) else { return }
-                    continuation.resume(throwing: BLEError.connectionTimedOut(peripheral.identifier))
+                let cancelConnection = {
+                    attempt.finish {
+                        timeoutTask?.cancel()
+                        _ = self.finishConnection(id: connectionID)
+                        self.central.cancelPeripheralConnection(peripheral)
+                        continuation.resume(throwing: BLEError.operationCancelled)
+                    }
                 }
-            }
 
-            startConnection(id: connectionID, peripheral: peripheral) { connectedPeripheral in
-                guard connectedPeripheral.identifier == peripheral.identifier else { return }
-                attempt.finish {
-                    timeoutTask?.cancel()
-                    guard self.finishConnection(id: connectionID) else { return }
-                    let session = PeripheralSession(
-                        device: device,
-                        peripheral: connectedPeripheral,
-                        central: self.central,
-                        options: options
-                    )
-                    continuation.resume(returning: session)
-                }
-            } onFailToConnect: { failedPeripheral, error in
-                guard failedPeripheral.identifier == peripheral.identifier else { return }
-                attempt.finish {
-                    timeoutTask?.cancel()
-                    guard self.finishConnection(id: connectionID) else { return }
-                    continuation.resume(
-                        throwing: BLEError.connectionFailed(
-                            peripheral.identifier,
-                            underlying: error.map(String.init(describing:))
+                timeoutTask = Task {
+                    try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                    attempt.finish {
+                        let ownsConnection = self.finishConnection(id: connectionID)
+                        self.central.cancelPeripheralConnection(peripheral)
+                        continuation.resume(
+                            throwing: ownsConnection
+                                ? BLEError.connectionTimedOut(peripheral.identifier)
+                                : BLEError.operationCancelled
                         )
-                    )
+                    }
                 }
+
+                startConnection(id: connectionID, peripheral: peripheral, onSuperseded: cancelConnection) { connectedPeripheral in
+                    guard connectedPeripheral.identifier == peripheral.identifier else { return }
+                    attempt.finish {
+                        timeoutTask?.cancel()
+                        guard self.finishConnection(id: connectionID) else {
+                            self.central.cancelPeripheralConnection(connectedPeripheral)
+                            continuation.resume(throwing: BLEError.operationCancelled)
+                            return
+                        }
+                        let session = PeripheralSession(
+                            device: device,
+                            peripheral: connectedPeripheral,
+                            central: self.central,
+                            options: options
+                        )
+                        continuation.resume(returning: session)
+                    }
+                } onFailToConnect: { failedPeripheral, error in
+                    guard failedPeripheral.identifier == peripheral.identifier else { return }
+                    attempt.finish {
+                        timeoutTask?.cancel()
+                        guard self.finishConnection(id: connectionID) else {
+                            continuation.resume(throwing: BLEError.operationCancelled)
+                            return
+                        }
+                        continuation.resume(
+                            throwing: BLEError.connectionFailed(
+                                peripheral.identifier,
+                                underlying: error.map(String.init(describing:))
+                            )
+                        )
+                    }
+                }
+
+                cancellation.set(cancelConnection)
             }
+        } onCancel: {
+            cancellation.cancel()
         }
     }
 }

@@ -1,6 +1,11 @@
 import Foundation
 
 public final class BLEClient {
+    private struct ActiveConnection {
+        let id: UUID
+        let cancel: () -> Void
+    }
+
     public struct Configuration: Sendable {
         public var restoreIdentifier: String?
 
@@ -16,7 +21,7 @@ public final class BLEClient {
     private var peripheralsByIdentifier: [UUID: PeripheralRepresenting] = [:]
     private var activeScanID: UUID?
     private var activeScanContinuation: AsyncStream<BLEDevice>.Continuation?
-    private var activeConnectionID: UUID?
+    private var activeConnection: ActiveConnection?
 
     public convenience init(configuration: Configuration = .init()) {
         self.init(central: CentralManagerBox(configuration: configuration))
@@ -108,11 +113,13 @@ public final class BLEClient {
     func startConnection(
         id: UUID,
         peripheral: PeripheralRepresenting,
+        onSuperseded: @escaping () -> Void,
         onConnect: @escaping (PeripheralRepresenting) -> Void,
         onFailToConnect: @escaping (PeripheralRepresenting, Error?) -> Void
     ) {
         connectionLock.lock()
-        activeConnectionID = id
+        let previousConnection = activeConnection
+        activeConnection = ActiveConnection(id: id, cancel: onSuperseded)
         central.onConnect = { [weak self] connectedPeripheral in
             guard self?.isActiveConnection(id: id) == true else { return }
             onConnect(connectedPeripheral)
@@ -121,30 +128,34 @@ public final class BLEClient {
             guard self?.isActiveConnection(id: id) == true else { return }
             onFailToConnect(failedPeripheral, error)
         }
-        central.connect(peripheral)
         connectionLock.unlock()
+
+        previousConnection?.cancel()
+
+        guard isActiveConnection(id: id) else {
+            return
+        }
+
+        central.connect(peripheral)
     }
 
     func isActiveConnection(id: UUID) -> Bool {
         connectionLock.lock()
         defer { connectionLock.unlock() }
-        return activeConnectionID == id
+        return activeConnection?.id == id
     }
 
-    func finishConnection(id: UUID, cancelling peripheral: PeripheralRepresenting? = nil) -> Bool {
+    func finishConnection(id: UUID) -> Bool {
         connectionLock.lock()
         defer { connectionLock.unlock() }
 
-        guard activeConnectionID == id else {
+        guard activeConnection?.id == id else {
             return false
         }
 
-        activeConnectionID = nil
+        activeConnection = nil
         central.onConnect = nil
         central.onFailToConnect = nil
-        if let peripheral {
-            central.cancelPeripheralConnection(peripheral)
-        }
         return true
     }
 

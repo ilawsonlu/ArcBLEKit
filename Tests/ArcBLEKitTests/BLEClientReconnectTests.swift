@@ -39,6 +39,34 @@ final class BLEClientReconnectTests: XCTestCase {
         }
     }
 
+    func testFindDeviceCancellationStopsScanAndThrowsOperationCancelled() async {
+        let central = FakeCentralManager()
+        let client = BLEClient(central: central)
+
+        let task = Task {
+            try await client.findDevice(matching: ScanFilter(name: "Arc"), timeout: 1)
+        }
+
+        await waitForScanStart(on: central)
+        task.cancel()
+
+        guard let scanResult = await result(from: task) else {
+            task.cancel()
+            XCTFail("Cancelled scan did not complete")
+            return
+        }
+
+        switch scanResult {
+        case .success:
+            XCTFail("Expected scan cancellation")
+        case let .failure(error):
+            XCTAssertEqual(error as? BLEError, .operationCancelled)
+        }
+
+        XCTAssertTrue(central.didStopScan)
+        XCTAssertEqual(central.stopScanCallCount, 1)
+    }
+
     func testFindDevicePreservesPoweredOffBluetoothError() async {
         let central = FakeCentralManager(state: .poweredOff)
         let client = BLEClient(central: central)
@@ -182,6 +210,38 @@ final class BLEClientReconnectTests: XCTestCase {
         XCTAssertNil(central.onFailToConnect)
     }
 
+    func testReconnectCancellationCancelsUnderlyingConnectionAndClearsCallbacks() async {
+        let central = FakeCentralManager()
+        let id = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let peripheral = FakePeripheral(identifier: id, name: "Arc")
+        central.retrievedPeripherals = [peripheral]
+        let client = BLEClient(central: central)
+
+        let task = Task {
+            try await client.reconnect(identifier: id, fallbackScan: nil, options: ConnectionOptions(timeout: 1))
+        }
+
+        await waitForConnectAttempt(on: central)
+        task.cancel()
+
+        guard let connectionResult = await result(from: task) else {
+            task.cancel()
+            XCTFail("Cancelled connection did not complete")
+            return
+        }
+
+        switch connectionResult {
+        case .success:
+            XCTFail("Expected connection cancellation")
+        case let .failure(error):
+            XCTAssertEqual(error as? BLEError, .operationCancelled)
+        }
+
+        XCTAssertEqual(central.cancelledIdentifiers, [id])
+        XCTAssertNil(central.onConnect)
+        XCTAssertNil(central.onFailToConnect)
+    }
+
     func testInvalidTimeoutDoesNotTrap() async {
         let client = BLEClient(central: FakeCentralManager())
 
@@ -193,15 +253,87 @@ final class BLEClientReconnectTests: XCTestCase {
         }
     }
 
+    func testStartingSecondConnectionCancelsFirstAndKeepsSecondActive() async throws {
+        let central = FakeCentralManager()
+        let firstID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let secondID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        let firstPeripheral = FakePeripheral(identifier: firstID, name: "Arc One")
+        let secondPeripheral = FakePeripheral(identifier: secondID, name: "Arc Two")
+        central.retrievedPeripherals = [firstPeripheral, secondPeripheral]
+        let client = BLEClient(central: central)
+
+        let firstTask = Task {
+            try await client.reconnect(identifier: firstID, fallbackScan: nil, options: ConnectionOptions(timeout: 1))
+        }
+
+        await waitForConnectAttempt(on: central, count: 1)
+
+        let secondTask = Task {
+            try await client.reconnect(identifier: secondID, fallbackScan: nil, options: ConnectionOptions(timeout: 1))
+        }
+
+        await waitForConnectAttempt(on: central, count: 2)
+
+        guard let firstResult = await result(from: firstTask) else {
+            firstTask.cancel()
+            secondTask.cancel()
+            XCTFail("First connection did not complete")
+            return
+        }
+
+        switch firstResult {
+        case .success:
+            XCTFail("Expected first connection to be cancelled")
+        case let .failure(error):
+            XCTAssertEqual(error as? BLEError, .operationCancelled)
+        }
+
+        XCTAssertEqual(central.cancelledIdentifiers, [firstID])
+        XCTAssertNotNil(central.onConnect)
+        XCTAssertNotNil(central.onFailToConnect)
+
+        central.completeConnection(firstPeripheral)
+        central.completeConnection(secondPeripheral)
+
+        let session = try await secondTask.value
+        XCTAssertEqual(session.device.id, secondID)
+        XCTAssertNil(central.onConnect)
+        XCTAssertNil(central.onFailToConnect)
+    }
+
     private func waitForScanStart(on central: FakeCentralManager) async {
         while central.scanForPeripheralsCallCount == 0 {
             await Task.yield()
         }
     }
 
-    private func waitForConnectAttempt(on central: FakeCentralManager) async {
-        while central.connectedIdentifiers.isEmpty {
+    private func waitForConnectAttempt(on central: FakeCentralManager, count: Int = 1) async {
+        while central.connectedIdentifiers.count < count {
             await Task.yield()
+        }
+    }
+
+    private func result<T>(
+        from task: Task<T, Error>,
+        timeoutNanoseconds: UInt64 = 200_000_000
+    ) async -> Result<T, Error>? {
+        await withTaskGroup(of: Result<T, Error>?.self) { group in
+            group.addTask {
+                do {
+                    return .success(try await task.value)
+                } catch {
+                    return .failure(error)
+                }
+            }
+
+            group.addTask {
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                return nil
+            }
+
+            let result = await group.next()!
+            group.cancelAll()
+            return result
         }
     }
 }
