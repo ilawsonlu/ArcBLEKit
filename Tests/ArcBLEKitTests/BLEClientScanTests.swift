@@ -14,6 +14,16 @@ final class BLEClientScanTests: XCTestCase {
         XCTAssertEqual(central.scannedServiceUUIDs, [service])
     }
 
+    func testScanPassesNilServicesToCentralWhenFilterHasNoServiceUUIDs() async {
+        let central = FakeCentralManager()
+        let client = BLEClient(central: central)
+
+        let stream = client.scan(filter: ScanFilter())
+        _ = stream.makeAsyncIterator()
+
+        XCTAssertNil(central.scannedServiceUUIDs)
+    }
+
     func testScanEmitsMatchingDeviceAndStoresPeripheralForLaterConnection() async throws {
         let central = FakeCentralManager()
         let client = BLEClient(central: central)
@@ -45,7 +55,9 @@ final class BLEClientScanTests: XCTestCase {
         let client = BLEClient(central: central)
         let matchingID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
         let matchingPeripheral = FakePeripheral(identifier: matchingID, name: "Arc One")
-        let rejectedPeripheral = FakePeripheral(identifier: UUID(), name: "Other")
+        let rejectedByIdentifier = FakePeripheral(identifier: UUID(), name: "Arc One")
+        let rejectedByNamePrefix = FakePeripheral(identifier: matchingID, name: "Other")
+        let rejectedByManufacturerData = FakePeripheral(identifier: matchingID, name: "Arc Two")
         var iterator = client.scan(
             filter: ScanFilter(
                 peripheralIdentifiers: [matchingID],
@@ -55,11 +67,29 @@ final class BLEClientScanTests: XCTestCase {
         ).makeAsyncIterator()
 
         central.discover(
-            rejectedPeripheral,
+            rejectedByIdentifier,
+            advertisement: BLEAdvertisement(
+                localName: "Arc One",
+                serviceUUIDs: [],
+                manufacturerData: Data([0xAA])
+            ),
+            rssi: -70
+        )
+        central.discover(
+            rejectedByNamePrefix,
             advertisement: BLEAdvertisement(
                 localName: "Other",
                 serviceUUIDs: [],
                 manufacturerData: Data([0xAA])
+            ),
+            rssi: -70
+        )
+        central.discover(
+            rejectedByManufacturerData,
+            advertisement: BLEAdvertisement(
+                localName: "Arc Two",
+                serviceUUIDs: [],
+                manufacturerData: Data([0xBB])
             ),
             rssi: -70
         )
