@@ -11,7 +11,10 @@ public final class BLEClient {
 
     let central: CentralManaging
     private let lock = NSLock()
+    private let scanLock = NSLock()
     private var peripheralsByIdentifier: [UUID: PeripheralRepresenting] = [:]
+    private var activeScanID: UUID?
+    private var activeScanContinuation: AsyncStream<BLEDevice>.Continuation?
 
     public convenience init(configuration: Configuration = .init()) {
         self.init(central: CentralManagerBox(configuration: configuration))
@@ -23,8 +26,8 @@ public final class BLEClient {
 
     func remember(_ peripheral: PeripheralRepresenting) {
         lock.lock()
+        defer { lock.unlock() }
         peripheralsByIdentifier[peripheral.identifier] = peripheral
-        lock.unlock()
     }
 
     func rememberedPeripheral(identifier: UUID) -> PeripheralRepresenting? {
@@ -46,5 +49,34 @@ public final class BLEClient {
         case .unknown, .resetting:
             throw BLEError.bluetoothUnavailable
         }
+    }
+
+    func beginScan(id: UUID, continuation: AsyncStream<BLEDevice>.Continuation) {
+        scanLock.lock()
+        let previousContinuation = activeScanContinuation
+        activeScanID = id
+        activeScanContinuation = continuation
+        scanLock.unlock()
+
+        previousContinuation?.finish()
+    }
+
+    func isActiveScan(id: UUID) -> Bool {
+        scanLock.lock()
+        defer { scanLock.unlock() }
+        return activeScanID == id
+    }
+
+    func endScan(id: UUID) -> Bool {
+        scanLock.lock()
+        defer { scanLock.unlock() }
+
+        guard activeScanID == id else {
+            return false
+        }
+
+        activeScanID = nil
+        activeScanContinuation = nil
+        return true
     }
 }

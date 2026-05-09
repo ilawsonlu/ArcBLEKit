@@ -118,4 +118,43 @@ final class BLEClientScanTests: XCTestCase {
 
         XCTAssertTrue(central.didStopScan)
     }
+
+    func testStartingSecondScanFinishesFirstScanWithoutStoppingSecondScan() async {
+        let central = FakeCentralManager()
+        let client = BLEClient(central: central)
+        var firstIterator = client.scan(filter: ScanFilter(namePrefix: "First")).makeAsyncIterator()
+        let firstNext = Task { await firstIterator.next() }
+
+        let secondStream = client.scan(filter: ScanFilter(namePrefix: "Second"))
+        var secondIterator = secondStream.makeAsyncIterator()
+        let secondPeripheral = FakePeripheral(name: "Second Device")
+
+        let firstResult = await firstNext.value
+        XCTAssertNil(firstResult)
+        XCTAssertFalse(central.didStopScan)
+
+        central.discover(
+            secondPeripheral,
+            advertisement: BLEAdvertisement(
+                localName: "Second Device",
+                serviceUUIDs: [],
+                manufacturerData: nil
+            ),
+            rssi: -50
+        )
+
+        let device = await secondIterator.next()
+        XCTAssertEqual(device?.name, "Second Device")
+    }
+
+    func testScanDoesNotStartCentralScanWhenBluetoothIsPoweredOff() async {
+        let central = FakeCentralManager(state: .poweredOff)
+        let client = BLEClient(central: central)
+        var iterator = client.scan(filter: ScanFilter()).makeAsyncIterator()
+
+        let device = await iterator.next()
+
+        XCTAssertNil(device)
+        XCTAssertNil(central.scannedServiceUUIDs)
+    }
 }
