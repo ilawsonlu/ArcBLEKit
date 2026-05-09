@@ -89,16 +89,17 @@ public final class BLEClient {
         return activeScanID == id
     }
 
-    func endScan(id: UUID) -> Bool {
+    func finishScan(id: UUID) {
         scanLock.lock()
         defer { scanLock.unlock() }
 
         guard activeScanID == id else {
-            return false
+            return
         }
 
         activeScanID = nil
         activeScanContinuation = nil
-        return true
+        central.onDiscover = nil
+        central.stopScan()
     }
 }

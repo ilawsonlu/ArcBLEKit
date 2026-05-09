@@ -16,9 +16,7 @@ public extension BLEClient {
 
             continuation.onTermination = { [weak self] _ in
                 guard let self else { return }
-                guard self.endScan(id: scanID) else { return }
-                self.central.onDiscover = nil
-                self.central.stopScan()
+                self.finishScan(id: scanID)
             }
         }
     }
