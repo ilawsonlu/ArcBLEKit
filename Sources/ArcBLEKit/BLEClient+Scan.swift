@@ -42,6 +42,9 @@ public extension BLEClient {
         timeout: TimeInterval
     ) async throws -> BLEDevice {
         try validateBluetoothReady()
+        guard let timeoutNanoseconds = timeoutNanoseconds(timeout) else {
+            throw BLEError.scanTimedOut
+        }
 
         let stream = scan(filter: filter)
         let attempt = FindDeviceAttempt()
@@ -63,7 +66,7 @@ public extension BLEClient {
             }
 
             timeoutTask = Task {
-                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
                 attempt.finish {
                     scanTask?.cancel()
                     continuation.resume(throwing: BLEError.scanTimedOut)

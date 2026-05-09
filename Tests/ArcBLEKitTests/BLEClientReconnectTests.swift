@@ -134,6 +134,65 @@ final class BLEClientReconnectTests: XCTestCase {
         XCTAssertTrue(central.connectedIdentifiers.isEmpty)
     }
 
+    func testConnectTimeoutCancelsUnderlyingConnectionAndClearsCallbacks() async {
+        let central = FakeCentralManager()
+        let id = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let peripheral = FakePeripheral(identifier: id, name: "Arc")
+        central.retrievedPeripherals = [peripheral]
+        let client = BLEClient(central: central)
+
+        do {
+            _ = try await client.reconnect(identifier: id, fallbackScan: nil, options: ConnectionOptions(timeout: 0.01))
+            XCTFail("Expected connectionTimedOut")
+        } catch {
+            XCTAssertEqual(error as? BLEError, .connectionTimedOut(id))
+        }
+
+        XCTAssertEqual(central.cancelledIdentifiers, [id])
+        XCTAssertNil(central.onConnect)
+        XCTAssertNil(central.onFailToConnect)
+    }
+
+    func testConnectFailureThrowsConnectionFailedAndClearsCallbacks() async {
+        struct TestFailure: Error, CustomStringConvertible {
+            var description: String { "link failed" }
+        }
+
+        let central = FakeCentralManager()
+        let id = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let peripheral = FakePeripheral(identifier: id, name: "Arc")
+        central.retrievedPeripherals = [peripheral]
+        let client = BLEClient(central: central)
+
+        let task = Task {
+            try await client.reconnect(identifier: id, fallbackScan: nil, options: ConnectionOptions(timeout: 1))
+        }
+
+        await waitForConnectAttempt(on: central)
+        central.failConnection(peripheral, error: TestFailure())
+
+        do {
+            _ = try await task.value
+            XCTFail("Expected connectionFailed")
+        } catch {
+            XCTAssertEqual(error as? BLEError, .connectionFailed(id, underlying: "link failed"))
+        }
+
+        XCTAssertNil(central.onConnect)
+        XCTAssertNil(central.onFailToConnect)
+    }
+
+    func testInvalidTimeoutDoesNotTrap() async {
+        let client = BLEClient(central: FakeCentralManager())
+
+        do {
+            _ = try await client.findDevice(matching: ScanFilter(name: "Arc"), timeout: -.infinity)
+            XCTFail("Expected scanTimedOut")
+        } catch {
+            XCTAssertEqual(error as? BLEError, .scanTimedOut)
+        }
+    }
+
     private func waitForScanStart(on central: FakeCentralManager) async {
         while central.scanForPeripheralsCallCount == 0 {
             await Task.yield()

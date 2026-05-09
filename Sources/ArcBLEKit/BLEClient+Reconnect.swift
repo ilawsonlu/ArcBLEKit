@@ -63,30 +63,29 @@ public extension BLEClient {
         options: ConnectionOptions
     ) async throws -> PeripheralSession {
         try validateBluetoothReady()
+        guard let timeoutNanoseconds = timeoutNanoseconds(options.timeout) else {
+            throw BLEError.connectionTimedOut(peripheral.identifier)
+        }
 
+        let connectionID = UUID()
         let attempt = ConnectionAttempt()
 
         return try await withCheckedThrowingContinuation { continuation in
             var timeoutTask: Task<Void, Never>?
 
-            func clearCallbacks() {
-                self.central.onConnect = nil
-                self.central.onFailToConnect = nil
-            }
-
             timeoutTask = Task {
-                try? await Task.sleep(nanoseconds: UInt64(options.timeout * 1_000_000_000))
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
                 attempt.finish {
-                    clearCallbacks()
+                    guard self.finishConnection(id: connectionID, cancelling: peripheral) else { return }
                     continuation.resume(throwing: BLEError.connectionTimedOut(peripheral.identifier))
                 }
             }
 
-            central.onConnect = { connectedPeripheral in
+            startConnection(id: connectionID, peripheral: peripheral) { connectedPeripheral in
                 guard connectedPeripheral.identifier == peripheral.identifier else { return }
                 attempt.finish {
                     timeoutTask?.cancel()
-                    clearCallbacks()
+                    guard self.finishConnection(id: connectionID) else { return }
                     let session = PeripheralSession(
                         device: device,
                         peripheral: connectedPeripheral,
@@ -95,13 +94,11 @@ public extension BLEClient {
                     )
                     continuation.resume(returning: session)
                 }
-            }
-
-            central.onFailToConnect = { failedPeripheral, error in
+            } onFailToConnect: { failedPeripheral, error in
                 guard failedPeripheral.identifier == peripheral.identifier else { return }
                 attempt.finish {
                     timeoutTask?.cancel()
-                    clearCallbacks()
+                    guard self.finishConnection(id: connectionID) else { return }
                     continuation.resume(
                         throwing: BLEError.connectionFailed(
                             peripheral.identifier,
@@ -110,8 +107,6 @@ public extension BLEClient {
                     )
                 }
             }
-
-            central.connect(peripheral)
         }
     }
 }
