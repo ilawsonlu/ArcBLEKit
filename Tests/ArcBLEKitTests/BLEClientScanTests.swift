@@ -117,6 +117,7 @@ final class BLEClientScanTests: XCTestCase {
         await Task.yield()
 
         XCTAssertTrue(central.didStopScan)
+        XCTAssertEqual(central.stopScanCallCount, 1)
     }
 
     func testStartingSecondScanFinishesFirstScanWithoutStoppingSecondScan() async {
@@ -132,6 +133,7 @@ final class BLEClientScanTests: XCTestCase {
         let firstResult = await firstNext.value
         XCTAssertNil(firstResult)
         XCTAssertFalse(central.didStopScan)
+        XCTAssertEqual(central.stopScanCallCount, 0)
 
         central.discover(
             secondPeripheral,

@@ -12,24 +12,7 @@ public extension BLEClient {
                 return
             }
 
-            beginScan(id: scanID, continuation: continuation)
-
-            central.onDiscover = { [weak self] peripheral, advertisement, rssi in
-                guard let self else { return }
-                guard self.isActiveScan(id: scanID) else { return }
-                let device = BLEAdvertisementParser.makeDevice(
-                    peripheral: peripheral,
-                    advertisement: advertisement,
-                    rssi: rssi
-                )
-                guard filter.matches(device) else { return }
-                self.remember(peripheral)
-                continuation.yield(device)
-            }
-
-            central.scanForPeripherals(
-                withServices: filter.serviceUUIDs.isEmpty ? nil : filter.serviceUUIDs
-            )
+            startScan(id: scanID, filter: filter, continuation: continuation)
 
             continuation.onTermination = { [weak self] _ in
                 guard let self else { return }

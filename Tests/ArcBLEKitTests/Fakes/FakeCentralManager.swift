@@ -12,6 +12,7 @@ final class FakeCentralManager: CentralManaging {
 
     private(set) var scannedServiceUUIDs: [CBUUID]?
     private(set) var didStopScan = false
+    private(set) var stopScanCallCount = 0
     private(set) var retrievedIdentifiers: [UUID] = []
     private(set) var connectedIdentifiers: [UUID] = []
     private(set) var cancelledIdentifiers: [UUID] = []
@@ -28,6 +29,7 @@ final class FakeCentralManager: CentralManaging {
 
     func stopScan() {
         didStopScan = true
+        stopScanCallCount += 1
     }
 
     func retrievePeripherals(withIdentifiers identifiers: [UUID]) -> [PeripheralRepresenting] {

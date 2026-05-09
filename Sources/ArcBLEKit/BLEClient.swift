@@ -51,11 +51,33 @@ public final class BLEClient {
         }
     }
 
-    func beginScan(id: UUID, continuation: AsyncStream<BLEDevice>.Continuation) {
+    func startScan(
+        id: UUID,
+        filter: ScanFilter,
+        continuation: AsyncStream<BLEDevice>.Continuation
+    ) {
         scanLock.lock()
         let previousContinuation = activeScanContinuation
         activeScanID = id
         activeScanContinuation = continuation
+
+        central.onDiscover = { [weak self] peripheral, advertisement, rssi in
+            guard let self else { return }
+            guard self.isActiveScan(id: id) else { return }
+            let device = BLEAdvertisementParser.makeDevice(
+                peripheral: peripheral,
+                advertisement: advertisement,
+                rssi: rssi
+            )
+            guard filter.matches(device) else { return }
+            self.remember(peripheral)
+            continuation.yield(device)
+        }
+
+        central.scanForPeripherals(
+            withServices: filter.serviceUUIDs.isEmpty ? nil : filter.serviceUUIDs
+        )
+
         scanLock.unlock()
 
         previousContinuation?.finish()
