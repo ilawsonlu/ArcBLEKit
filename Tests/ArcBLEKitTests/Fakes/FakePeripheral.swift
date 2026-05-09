@@ -33,6 +33,7 @@ final class FakePeripheral: PeripheralRepresenting {
 
     private(set) var discoveredServiceUUIDs: [CBUUID]?
     private(set) var discoveredCharacteristicUUIDs: [CBUUID]?
+    private(set) var discoveredCharacteristicsForServiceUUID: CBUUID?
     private(set) var readCharacteristics: [CBUUID] = []
     private(set) var writtenValues: [(data: Data, characteristic: CBUUID, type: CBCharacteristicWriteType)] = []
     private(set) var notifyChanges: [(enabled: Bool, characteristic: CBUUID)] = []
@@ -48,6 +49,7 @@ final class FakePeripheral: PeripheralRepresenting {
 
     func discoverCharacteristics(_ characteristicUUIDs: [CBUUID]?, for service: ServiceRepresenting) {
         discoveredCharacteristicUUIDs = characteristicUUIDs
+        discoveredCharacteristicsForServiceUUID = service.uuid
     }
 
     func readValue(for characteristic: CharacteristicRepresenting) {

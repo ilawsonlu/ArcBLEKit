@@ -39,4 +39,21 @@ final class BLEAdvertisementParserTests: XCTestCase {
         XCTAssertEqual(device.advertisedServiceUUIDs, [CBUUID(string: "FFF0")])
         XCTAssertEqual(device.manufacturerData, Data([0x10]))
     }
+
+    func testBuildsBLEDeviceUsingPeripheralNameWhenAdvertisementNameIsMissing() {
+        let peripheral = FakePeripheral(name: "Fallback Name")
+        let advertisement = BLEAdvertisement(
+            localName: nil,
+            serviceUUIDs: [],
+            manufacturerData: nil
+        )
+
+        let device = BLEAdvertisementParser.makeDevice(
+            peripheral: peripheral,
+            advertisement: advertisement,
+            rssi: -60
+        )
+
+        XCTAssertEqual(device.name, "Fallback Name")
+    }
 }
