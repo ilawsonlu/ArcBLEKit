@@ -3,6 +3,10 @@ import XCTest
 @testable import ArcBLEKit
 
 final class PeripheralSessionOperationTests: XCTestCase {
+    struct TestFailure: Error, CustomStringConvertible {
+        var description: String { "operation failed" }
+    }
+
     func testReadDiscoversServiceAndCharacteristicThenReturnsData() async throws {
         let serviceUUID = CBUUID(string: "FFF0")
         let characteristicUUID = CBUUID(string: "FFF1")
@@ -98,6 +102,123 @@ final class PeripheralSessionOperationTests: XCTestCase {
             XCTFail("Expected serviceNotFound")
         } catch {
             XCTAssertEqual(error as? BLEError, .serviceNotFound(serviceUUID))
+        }
+    }
+
+    func testMissingCharacteristicThrowsCharacteristicNotFound() async {
+        let serviceUUID = CBUUID(string: "FFF0")
+        let characteristicUUID = CBUUID(string: "FFF1")
+        let peripheral = FakePeripheral()
+        let session = makeSession(peripheral: peripheral)
+        let service = FakeService(uuid: serviceUUID)
+
+        let task = Task {
+            try await session.read(characteristic: characteristicUUID, service: serviceUUID)
+        }
+
+        await waitForServiceDiscovery(on: peripheral)
+        peripheral.completeServiceDiscovery([service])
+        await waitForCharacteristicDiscovery(on: peripheral)
+        peripheral.completeCharacteristicDiscovery(service: service, characteristics: [])
+
+        do {
+            _ = try await task.value
+            XCTFail("Expected characteristicNotFound")
+        } catch {
+            XCTAssertEqual(
+                error as? BLEError,
+                .characteristicNotFound(characteristicUUID, service: serviceUUID)
+            )
+        }
+    }
+
+    func testReadFailureThrowsReadFailed() async {
+        let serviceUUID = CBUUID(string: "FFF0")
+        let characteristicUUID = CBUUID(string: "FFF1")
+        let peripheral = FakePeripheral()
+        let session = makeSession(peripheral: peripheral)
+        let service = FakeService(uuid: serviceUUID)
+        let characteristic = FakeCharacteristic(uuid: characteristicUUID, serviceUUID: serviceUUID)
+
+        let task = Task {
+            try await session.read(characteristic: characteristicUUID, service: serviceUUID)
+        }
+
+        await waitForServiceDiscovery(on: peripheral)
+        peripheral.completeServiceDiscovery([service])
+        await waitForCharacteristicDiscovery(on: peripheral)
+        peripheral.completeCharacteristicDiscovery(service: service, characteristics: [characteristic])
+        await waitForRead(on: peripheral)
+        peripheral.completeRead(characteristic: characteristic, data: nil, error: TestFailure())
+
+        do {
+            _ = try await task.value
+            XCTFail("Expected readFailed")
+        } catch {
+            XCTAssertEqual(
+                error as? BLEError,
+                .readFailed(characteristicUUID, underlying: "operation failed")
+            )
+        }
+    }
+
+    func testWriteFailureThrowsWriteFailed() async {
+        let serviceUUID = CBUUID(string: "FFF0")
+        let characteristicUUID = CBUUID(string: "FFF2")
+        let peripheral = FakePeripheral()
+        let session = makeSession(peripheral: peripheral)
+        let service = FakeService(uuid: serviceUUID)
+        let characteristic = FakeCharacteristic(uuid: characteristicUUID, serviceUUID: serviceUUID)
+
+        let task = Task {
+            try await session.write(Data([0x09]), to: characteristicUUID, service: serviceUUID, type: .withResponse)
+        }
+
+        await waitForServiceDiscovery(on: peripheral)
+        peripheral.completeServiceDiscovery([service])
+        await waitForCharacteristicDiscovery(on: peripheral)
+        peripheral.completeCharacteristicDiscovery(service: service, characteristics: [characteristic])
+        await waitForWrite(on: peripheral)
+        peripheral.completeWrite(characteristic: characteristic, error: TestFailure())
+
+        do {
+            try await task.value
+            XCTFail("Expected writeFailed")
+        } catch {
+            XCTAssertEqual(
+                error as? BLEError,
+                .writeFailed(characteristicUUID, underlying: "operation failed")
+            )
+        }
+    }
+
+    func testNotificationSetupFailureThrowsNotificationSetupFailed() async {
+        let serviceUUID = CBUUID(string: "FFF0")
+        let characteristicUUID = CBUUID(string: "FFF3")
+        let peripheral = FakePeripheral()
+        let session = makeSession(peripheral: peripheral)
+        let service = FakeService(uuid: serviceUUID)
+        let characteristic = FakeCharacteristic(uuid: characteristicUUID, serviceUUID: serviceUUID)
+
+        let task = Task {
+            try await session.notifications(for: characteristicUUID, service: serviceUUID)
+        }
+
+        await waitForServiceDiscovery(on: peripheral)
+        peripheral.completeServiceDiscovery([service])
+        await waitForCharacteristicDiscovery(on: peripheral)
+        peripheral.completeCharacteristicDiscovery(service: service, characteristics: [characteristic])
+        await waitForNotifyChange(on: peripheral)
+        peripheral.completeNotifySetup(characteristic: characteristic, error: TestFailure())
+
+        do {
+            _ = try await task.value
+            XCTFail("Expected notificationSetupFailed")
+        } catch {
+            XCTAssertEqual(
+                error as? BLEError,
+                .notificationSetupFailed(characteristicUUID, underlying: "operation failed")
+            )
         }
     }
 
