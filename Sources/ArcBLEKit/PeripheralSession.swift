@@ -32,9 +32,41 @@ public final class PeripheralSession {
         stateContinuation.yield(state)
     }
 
+    func handleDisconnect(error: Error?) {
+        emit(.disconnected)
+
+        guard case let .limited(maxAttempts, delay) = options.autoReconnect,
+              maxAttempts > 0 else {
+            return
+        }
+
+        Task {
+            for attempt in 1...maxAttempts {
+                emit(.reconnecting(attempt: attempt))
+                try? await Task.sleep(nanoseconds: reconnectDelayNanoseconds(delay))
+                emit(.connecting)
+                central.connect(peripheral)
+                return
+            }
+        }
+    }
+
     public func disconnect() async {
         central.cancelPeripheralConnection(peripheral)
         emit(.disconnected)
         stateContinuation.finish()
+    }
+
+    private func reconnectDelayNanoseconds(_ delay: TimeInterval) -> UInt64 {
+        guard delay.isFinite, delay > 0 else {
+            return 0
+        }
+
+        let nanoseconds = delay * 1_000_000_000
+        guard nanoseconds < Double(UInt64.max) else {
+            return UInt64.max
+        }
+
+        return UInt64(nanoseconds)
     }
 }

@@ -112,6 +112,7 @@ public extension BLEClient {
                             central: self.central,
                             options: options
                         )
+                        self.remember(session)
                         continuation.resume(returning: session)
                     }
                 } onFailToConnect: { failedPeripheral, error in

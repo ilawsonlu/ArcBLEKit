@@ -19,6 +19,7 @@ public final class BLEClient {
     private let scanLock = NSLock()
     private let connectionLock = NSLock()
     private var peripheralsByIdentifier: [UUID: PeripheralRepresenting] = [:]
+    private var sessionsByIdentifier: [UUID: PeripheralSession] = [:]
     private var activeScanID: UUID?
     private var activeScanContinuation: AsyncStream<BLEDevice>.Continuation?
     private var activeConnection: ActiveConnection?
@@ -29,6 +30,9 @@ public final class BLEClient {
 
     init(central: CentralManaging) {
         self.central = central
+        self.central.onDisconnect = { [weak self] peripheral, error in
+            self?.session(identifier: peripheral.identifier)?.handleDisconnect(error: error)
+        }
     }
 
     func remember(_ peripheral: PeripheralRepresenting) {
@@ -41,6 +45,18 @@ public final class BLEClient {
         lock.lock()
         defer { lock.unlock() }
         return peripheralsByIdentifier[identifier]
+    }
+
+    func remember(_ session: PeripheralSession) {
+        lock.lock()
+        defer { lock.unlock() }
+        sessionsByIdentifier[session.device.id] = session
+    }
+
+    func session(identifier: UUID) -> PeripheralSession? {
+        lock.lock()
+        defer { lock.unlock() }
+        return sessionsByIdentifier[identifier]
     }
 
     func validateBluetoothReady() throws {
