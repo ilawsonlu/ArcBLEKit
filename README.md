@@ -10,7 +10,22 @@ ArcBLEKit is a Swift Package for iOS BLE central apps. It wraps CoreBluetooth wi
 
 ## Installation
 
-Add this package in Xcode through **File > Add Package Dependencies** and select the repository URL for ArcBLEKit.
+Add this package in Xcode through **File > Add Package Dependencies**:
+
+```text
+https://github.com/ilawsonlu/ArcBLEKit.git
+```
+
+Or add ArcBLEKit to your `Package.swift` dependencies:
+
+```swift
+dependencies: [
+    .package(
+        url: "https://github.com/ilawsonlu/ArcBLEKit.git",
+        from: "0.1.1"
+    )
+]
+```
 
 ## iOS Permissions
 
@@ -101,3 +116,7 @@ for await data in updates {
 ## State Restoration
 
 `BLEClient.Configuration.restoreIdentifier` reserves a hook for CoreBluetooth restoration identifiers. Full app relaunch state restoration is not implemented in the first version.
+
+## License
+
+ArcBLEKit is available under the MIT License. See [LICENSE](LICENSE) for details.
