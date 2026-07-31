@@ -7,6 +7,8 @@ This checklist verifies the Task 4 behavior against a real BLE peripheral:
 - persist `BLEDevice.id`, which maps to `CBPeripheral.identifier`
 - reconnect by identifier
 - fall back to service UUID scanning when direct retrieval does not find the peripheral
+- read, write, and receive notifications without hanging
+- recover active notifications after an unexpected disconnect
 
 ## Requirements
 
@@ -21,6 +23,9 @@ Replace these with values for your device:
 
 ```swift
 let serviceUUID = CBUUID(string: "FFF0")
+let readUUID = CBUUID(string: "FFF1")
+let writeUUID = CBUUID(string: "FFF2")
+let notifyUUID = CBUUID(string: "FFF3")
 let timeout: TimeInterval = 10
 ```
 
@@ -149,6 +154,91 @@ Expected:
 - Timeout returns a BLE error instead of hanging.
 - Cancellation stops the scan and returns `operationCancelled`.
 
+## 7. Read, Write, and Notify
+
+Using the connected session:
+
+```swift
+let value = try await session.read(
+    characteristic: readUUID,
+    service: serviceUUID
+)
+
+try await session.write(
+    Data([0x01, 0x02]),
+    to: writeUUID,
+    service: serviceUUID,
+    type: .withResponse
+)
+
+let updates = try await session.notifications(
+    for: notifyUUID,
+    service: serviceUUID
+)
+
+for try await data in updates {
+    print("Notification:", data)
+}
+```
+
+Expected:
+
+- Reads and writes finish before their configured timeout.
+- A write with response reports the peripheral's error.
+- A write without response returns without waiting for `didWriteValueFor`.
+- Notification values continue to arrive without being mistaken for read responses.
+
+## 8. Backpressure and Payload Limits
+
+Run repeated `.withoutResponse` writes using payloads no larger than:
+
+```swift
+session.maximumWriteValueLength(for: .withoutResponse)
+```
+
+Expected:
+
+- Writes pause while CoreBluetooth reports that it cannot send.
+- Writes resume after the peripheral becomes ready.
+- An oversized payload fails with `valueTooLong` instead of being sent.
+
+## 9. Unexpected Disconnect and Notification Recovery
+
+Connect with:
+
+```swift
+ConnectionOptions(
+    timeout: 10,
+    autoReconnect: .limited(maxAttempts: 3, delay: 1)
+)
+```
+
+Keep a notification stream active, then power-cycle or move the peripheral out of range.
+
+Expected:
+
+- States progress through `disconnected`, `reconnecting`, and `connecting`.
+- A successful reconnect emits `connected`, rediscovers GATT attributes, restores notification state, and emits `ready`.
+- The existing notification stream receives new data after recovery.
+- Calling `session.disconnect()` never starts automatic reconnect.
+
+## 10. Stress Checks
+
+Repeat the following on a physical device:
+
+- 100 sequential reads
+- 100 writes with response
+- sustained writes without response at the device's supported rate
+- simultaneous notification streams on multiple characteristics
+- weak-signal disconnect and reconnect cycles
+- payloads at exactly the reported maximum write length
+
+Expected:
+
+- No operation waits forever.
+- Cancellation or disconnect completes all pending callers with an error.
+- Notification data stays routed to the matching service and characteristic.
+
 ## Pass Criteria
 
 Task 4 passes real-device smoke testing when:
@@ -158,3 +248,6 @@ Task 4 passes real-device smoke testing when:
 - saved `BLEDevice.id` can be used for reconnect
 - fallback scan does not connect to the wrong device
 - timeout and cancellation do not leave a stuck scan or connection attempt
+- read, write, and notification operations complete or fail predictably
+- automatic reconnect restores active notification streams
+- backpressure and maximum payload checks behave correctly

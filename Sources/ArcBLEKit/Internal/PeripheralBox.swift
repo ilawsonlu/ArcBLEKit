@@ -5,7 +5,7 @@ import CoreBluetooth
 #endif
 import Foundation
 
-final class ServiceBox: ServiceRepresenting {
+final class ServiceBox: ServiceRepresenting, @unchecked Sendable {
     let service: CBService
     var uuid: CBUUID { service.uuid }
 
@@ -14,27 +14,25 @@ final class ServiceBox: ServiceRepresenting {
     }
 }
 
-final class CharacteristicBox: CharacteristicRepresenting {
+final class CharacteristicBox: CharacteristicRepresenting, @unchecked Sendable {
     let characteristic: CBCharacteristic
     var uuid: CBUUID { characteristic.uuid }
     var serviceUUID: CBUUID { characteristic.service?.uuid ?? CBUUID(string: "") }
+    var properties: CBCharacteristicProperties { characteristic.properties }
+    var isNotifying: Bool { characteristic.isNotifying }
 
     init(characteristic: CBCharacteristic) {
         self.characteristic = characteristic
     }
 }
 
-final class PeripheralBox: NSObject, PeripheralRepresenting {
+final class PeripheralBox: NSObject, PeripheralRepresenting, @unchecked Sendable {
     let peripheral: CBPeripheral
 
     var identifier: UUID { peripheral.identifier }
     var name: String? { peripheral.name }
-    var onServicesDiscovered: (([ServiceRepresenting], Error?) -> Void)?
-    var onCharacteristicsDiscovered: ((ServiceRepresenting, [CharacteristicRepresenting], Error?) -> Void)?
-    var onValueRead: ((CharacteristicRepresenting, Data?, Error?) -> Void)?
-    var onValueWritten: ((CharacteristicRepresenting, Error?) -> Void)?
-    var onNotificationStateUpdated: ((CharacteristicRepresenting, Error?) -> Void)?
-    var onNotificationValue: ((CharacteristicRepresenting, Data) -> Void)?
+    var canSendWriteWithoutResponse: Bool { peripheral.canSendWriteWithoutResponse }
+    var onEvent: ((PeripheralEvent) -> Void)?
 
     init(peripheral: CBPeripheral) {
         self.peripheral = peripheral
@@ -69,12 +67,16 @@ final class PeripheralBox: NSObject, PeripheralRepresenting {
         guard let characteristicBox = characteristic as? CharacteristicBox else { return }
         peripheral.setNotifyValue(enabled, for: characteristicBox.characteristic)
     }
+
+    func maximumWriteValueLength(for type: CBCharacteristicWriteType) -> Int {
+        peripheral.maximumWriteValueLength(for: type)
+    }
 }
 
 extension PeripheralBox: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         let services = peripheral.services?.map(ServiceBox.init(service:)) ?? []
-        onServicesDiscovered?(services, error)
+        onEvent?(.servicesDiscovered(services, error))
     }
 
     func peripheral(
@@ -84,7 +86,7 @@ extension PeripheralBox: CBPeripheralDelegate {
     ) {
         let serviceBox = ServiceBox(service: service)
         let characteristics = service.characteristics?.map(CharacteristicBox.init(characteristic:)) ?? []
-        onCharacteristicsDiscovered?(serviceBox, characteristics, error)
+        onEvent?(.characteristicsDiscovered(serviceBox, characteristics, error))
     }
 
     func peripheral(
@@ -93,16 +95,7 @@ extension PeripheralBox: CBPeripheralDelegate {
         error: Error?
     ) {
         let box = CharacteristicBox(characteristic: characteristic)
-        if let error {
-            onValueRead?(box, nil, error)
-            return
-        }
-
-        if characteristic.isNotifying, let value = characteristic.value {
-            onNotificationValue?(box, value)
-        } else {
-            onValueRead?(box, characteristic.value, nil)
-        }
+        onEvent?(.valueUpdated(box, characteristic.value, error))
     }
 
     func peripheral(
@@ -110,7 +103,7 @@ extension PeripheralBox: CBPeripheralDelegate {
         didWriteValueFor characteristic: CBCharacteristic,
         error: Error?
     ) {
-        onValueWritten?(CharacteristicBox(characteristic: characteristic), error)
+        onEvent?(.valueWritten(CharacteristicBox(characteristic: characteristic), error))
     }
 
     func peripheral(
@@ -118,6 +111,15 @@ extension PeripheralBox: CBPeripheralDelegate {
         didUpdateNotificationStateFor characteristic: CBCharacteristic,
         error: Error?
     ) {
-        onNotificationStateUpdated?(CharacteristicBox(characteristic: characteristic), error)
+        onEvent?(
+            .notificationStateUpdated(
+                CharacteristicBox(characteristic: characteristic),
+                error
+            )
+        )
+    }
+
+    func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        onEvent?(.readyToWriteWithoutResponse)
     }
 }

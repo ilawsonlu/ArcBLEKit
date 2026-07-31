@@ -5,7 +5,7 @@ import CoreBluetooth
 #endif
 import Foundation
 
-protocol CentralManaging: AnyObject {
+protocol CentralManaging: AnyObject, Sendable {
     var state: BluetoothState { get }
     var onStateChange: ((BluetoothState) -> Void)? { get set }
     var onDiscover: ((PeripheralRepresenting, BLEAdvertisement, Int) -> Void)? { get set }

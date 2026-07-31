@@ -22,7 +22,7 @@ Or add ArcBLEKit to your `Package.swift` dependencies:
 dependencies: [
     .package(
         url: "https://github.com/ilawsonlu/ArcBLEKit.git",
-        from: "0.1.1"
+        from: "0.2.0"
     )
 ]
 ```
@@ -45,10 +45,14 @@ import CoreBluetooth
 let client = BLEClient()
 let service = CBUUID(string: "FFF0")
 
-for await device in client.scan(filter: ScanFilter(serviceUUIDs: [service])) {
+try await client.waitUntilReady(timeout: 10)
+
+for try await device in client.scan(filter: ScanFilter(serviceUUIDs: [service])) {
     print(device.name ?? "Unknown", device.id, device.rssi)
 }
 ```
+
+`scan(filter:)` is a throwing stream. Bluetooth power, authorization, and availability failures are reported as `BLEError` values instead of ending silently.
 
 ## Find and Connect
 
@@ -60,7 +64,10 @@ let device = try await client.findDevice(
 
 let session = try await client.connect(
     to: device,
-    options: ConnectionOptions(timeout: 10)
+    options: ConnectionOptions(
+        timeout: 10,
+        autoReconnect: .limited(maxAttempts: 3, delay: 1)
+    )
 )
 ```
 
@@ -89,7 +96,8 @@ let session = try await client.reconnect(
 ```swift
 let value = try await session.read(
     characteristic: CBUUID(string: "FFF1"),
-    service: CBUUID(string: "FFF0")
+    service: CBUUID(string: "FFF0"),
+    options: GATTOperationOptions(timeout: 10)
 )
 
 try await session.write(
@@ -100,6 +108,14 @@ try await session.write(
 )
 ```
 
+Writes validate the characteristic properties and the peripheral's maximum write length. A `.withoutResponse` write returns without waiting for a callback and honors CoreBluetooth backpressure through `canSendWriteWithoutResponse`.
+
+Inspect the current limit before sending:
+
+```swift
+let maximum = session.maximumWriteValueLength(for: .withoutResponse)
+```
+
 ## Notifications
 
 ```swift
@@ -108,10 +124,26 @@ let updates = try await session.notifications(
     service: CBUUID(string: "FFF0")
 )
 
-for await data in updates {
+for try await data in updates {
     print(data)
 }
 ```
+
+Notification streams are isolated by service UUID and characteristic UUID. Multiple subscribers to the same characteristic share the underlying CoreBluetooth notification, and active streams are restored after a successful automatic reconnect.
+
+## Bluetooth and Connection States
+
+```swift
+for await state in client.bluetoothStates {
+    print("Bluetooth:", state)
+}
+
+for await state in session.connectionStates {
+    print("Connection:", state)
+}
+```
+
+All GATT operations have a timeout, support task cancellation, and fail pending work when the peripheral disconnects.
 
 ## State Restoration
 

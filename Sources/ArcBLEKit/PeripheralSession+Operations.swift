@@ -8,27 +8,46 @@ import Foundation
 public extension PeripheralSession {
     func read(
         characteristic characteristicUUID: CBUUID,
-        service serviceUUID: CBUUID
+        service serviceUUID: CBUUID,
+        options: GATTOperationOptions = .init()
     ) async throws -> Data {
-        try await operationQueue.run {
-            let characteristic = try await resolveCharacteristic(characteristicUUID, service: serviceUUID)
+        try ensureConnected()
 
-            return try await withCheckedThrowingContinuation { continuation in
-                peripheral.onValueRead = { readCharacteristic, data, error in
-                    guard readCharacteristic.uuid == characteristicUUID else { return }
-                    if let error {
-                        continuation.resume(
-                            throwing: BLEError.readFailed(
-                                characteristicUUID,
-                                underlying: String(describing: error)
-                            )
-                        )
-                    } else {
-                        continuation.resume(returning: data ?? Data())
-                    }
-                }
-                peripheral.readValue(for: characteristic)
+        return try await operationQueue.run {
+            try self.ensureConnected()
+            let characteristic = try await self.resolveCharacteristic(
+                characteristicUUID,
+                service: serviceUUID,
+                options: options
+            )
+            guard characteristic.properties.contains(.read) else {
+                throw BLEError.unsupportedCharacteristicOperation(
+                    characteristicUUID,
+                    operation: .read
+                )
             }
+
+            let id = GATTCharacteristicID(
+                serviceUUID: serviceUUID,
+                characteristicUUID: characteristicUUID
+            )
+            let event = try await self.operationCoordinator.perform(
+                key: .read(id),
+                timeout: options.timeout
+            ) {
+                self.peripheral.readValue(for: characteristic)
+            }
+
+            guard case let .valueUpdated(_, data, error) = event else {
+                throw BLEError.readFailed(characteristicUUID, underlying: nil)
+            }
+            if let error {
+                throw BLEError.readFailed(
+                    characteristicUUID,
+                    underlying: String(describing: error)
+                )
+            }
+            return data ?? Data()
         }
     }
 
@@ -36,120 +55,381 @@ public extension PeripheralSession {
         _ data: Data,
         to characteristicUUID: CBUUID,
         service serviceUUID: CBUUID,
-        type: CBCharacteristicWriteType
+        type: CBCharacteristicWriteType,
+        options: GATTOperationOptions = .init()
     ) async throws {
-        try await operationQueue.run {
-            let characteristic = try await resolveCharacteristic(characteristicUUID, service: serviceUUID)
+        try ensureConnected()
 
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                peripheral.onValueWritten = { writtenCharacteristic, error in
-                    guard writtenCharacteristic.uuid == characteristicUUID else { return }
-                    if let error {
-                        continuation.resume(
-                            throwing: BLEError.writeFailed(
-                                characteristicUUID,
-                                underlying: String(describing: error)
-                            )
-                        )
-                    } else {
-                        continuation.resume()
-                    }
-                }
-                peripheral.writeValue(data, for: characteristic, type: type)
+        try await operationQueue.run {
+            try self.ensureConnected()
+            let characteristic = try await self.resolveCharacteristic(
+                characteristicUUID,
+                service: serviceUUID,
+                options: options
+            )
+            try self.validateWriteSupport(
+                characteristic,
+                characteristicUUID: characteristicUUID,
+                type: type
+            )
+
+            let maximumLength = self.peripheral.maximumWriteValueLength(for: type)
+            guard data.count <= maximumLength else {
+                throw BLEError.valueTooLong(
+                    actual: data.count,
+                    maximum: maximumLength
+                )
+            }
+
+            if type == .withoutResponse {
+                try await self.waitUntilReadyToWriteWithoutResponse(options: options)
+                self.peripheral.writeValue(
+                    data,
+                    for: characteristic,
+                    type: .withoutResponse
+                )
+                return
+            }
+
+            let id = GATTCharacteristicID(
+                serviceUUID: serviceUUID,
+                characteristicUUID: characteristicUUID
+            )
+            let event = try await self.operationCoordinator.perform(
+                key: .write(id),
+                timeout: options.timeout
+            ) {
+                self.peripheral.writeValue(
+                    data,
+                    for: characteristic,
+                    type: .withResponse
+                )
+            }
+
+            guard case let .valueWritten(_, error) = event else {
+                throw BLEError.writeFailed(characteristicUUID, underlying: nil)
+            }
+            if let error {
+                throw BLEError.writeFailed(
+                    characteristicUUID,
+                    underlying: String(describing: error)
+                )
             }
         }
     }
 
     func notifications(
         for characteristicUUID: CBUUID,
-        service serviceUUID: CBUUID
-    ) async throws -> AsyncStream<Data> {
-        try await operationQueue.run {
-            let characteristic = try await resolveCharacteristic(characteristicUUID, service: serviceUUID)
+        service serviceUUID: CBUUID,
+        options: GATTOperationOptions = .init()
+    ) async throws -> AsyncThrowingStream<Data, Error> {
+        try ensureConnected()
 
-            return try await withCheckedThrowingContinuation { continuation in
-                peripheral.onNotificationStateUpdated = { updatedCharacteristic, error in
-                    guard updatedCharacteristic.uuid == characteristicUUID else { return }
-                    if let error {
-                        continuation.resume(
-                            throwing: BLEError.notificationSetupFailed(
-                                characteristicUUID,
-                                underlying: String(describing: error)
-                            )
-                        )
-                    } else {
-                        let stream = AsyncStream<Data> { streamContinuation in
-                            self.peripheral.onNotificationValue = { notifiedCharacteristic, data in
-                                guard notifiedCharacteristic.uuid == characteristicUUID else { return }
-                                streamContinuation.yield(data)
-                            }
-                        }
-                        continuation.resume(returning: stream)
-                    }
+        return try await operationQueue.run {
+            try self.ensureConnected()
+            let id = GATTCharacteristicID(
+                serviceUUID: serviceUUID,
+                characteristicUUID: characteristicUUID
+            )
+            let characteristic = try await self.resolveCharacteristic(
+                characteristicUUID,
+                service: serviceUUID,
+                options: options
+            )
+
+            guard characteristic.properties.contains(.notify)
+                    || characteristic.properties.contains(.indicate) else {
+                throw BLEError.unsupportedCharacteristicOperation(
+                    characteristicUUID,
+                    operation: .notificationSetup
+                )
+            }
+
+            if !self.notificationRegistry.hasSubscribers(for: id) {
+                try await self.setNotifications(
+                    true,
+                    characteristic: characteristic,
+                    id: id,
+                    options: options
+                )
+            }
+
+            let subscriberID = UUID()
+            return AsyncThrowingStream { continuation in
+                self.notificationRegistry.add(
+                    continuation,
+                    subscriberID: subscriberID,
+                    characteristic: characteristic,
+                    for: id
+                )
+                continuation.onTermination = { [weak self] _ in
+                    self?.notificationTerminated(
+                        subscriberID: subscriberID,
+                        id: id,
+                        options: options
+                    )
                 }
-                peripheral.setNotifyValue(true, for: characteristic)
+            }
+        }
+    }
+
+    func maximumWriteValueLength(
+        for type: CBCharacteristicWriteType
+    ) -> Int {
+        peripheral.maximumWriteValueLength(for: type)
+    }
+}
+
+extension PeripheralSession {
+    func handlePeripheralEvent(_ event: PeripheralEvent) {
+        switch event {
+        case .servicesDiscovered:
+            operationCoordinator.resolve(key: .serviceDiscovery, event: event)
+
+        case let .characteristicsDiscovered(service, _, _):
+            operationCoordinator.resolve(
+                key: .characteristicDiscovery(serviceUUID: service.uuid),
+                event: event
+            )
+
+        case let .valueUpdated(characteristic, data, error):
+            let id = GATTCharacteristicID(
+                serviceUUID: characteristic.serviceUUID,
+                characteristicUUID: characteristic.uuid
+            )
+            let completedRead = operationCoordinator.resolve(
+                key: .read(id),
+                event: event
+            )
+
+            if let error {
+                if !completedRead,
+                   notificationRegistry.hasSubscribers(for: id) {
+                    notificationRegistry.finish(
+                        id: id,
+                        throwing: BLEError.notificationFailed(
+                            characteristic.uuid,
+                            underlying: String(describing: error)
+                        )
+                    )
+                }
+            } else if notificationRegistry.hasSubscribers(for: id) {
+                notificationRegistry.yield(data ?? Data(), for: id)
+            }
+
+        case let .valueWritten(characteristic, _):
+            let id = GATTCharacteristicID(
+                serviceUUID: characteristic.serviceUUID,
+                characteristicUUID: characteristic.uuid
+            )
+            operationCoordinator.resolve(key: .write(id), event: event)
+
+        case let .notificationStateUpdated(characteristic, _):
+            let id = GATTCharacteristicID(
+                serviceUUID: characteristic.serviceUUID,
+                characteristicUUID: characteristic.uuid
+            )
+            operationCoordinator.resolve(
+                key: .notificationSetup(id),
+                event: event
+            )
+
+        case .readyToWriteWithoutResponse:
+            operationCoordinator.resolve(
+                key: .writeWithoutResponseReady,
+                event: event
+            )
+        }
+    }
+
+    func restoreNotifications(options: GATTOperationOptions) async throws {
+        for id in notificationRegistry.activeIDs() {
+            try await operationQueue.run {
+                let characteristic = try await self.resolveCharacteristic(
+                    id.characteristicUUID,
+                    service: id.serviceUUID,
+                    options: options
+                )
+                try await self.setNotifications(
+                    true,
+                    characteristic: characteristic,
+                    id: id,
+                    options: options
+                )
+                self.notificationRegistry.update(
+                    characteristic: characteristic,
+                    for: id
+                )
             }
         }
     }
 
     private func resolveCharacteristic(
         _ characteristicUUID: CBUUID,
-        service serviceUUID: CBUUID
+        service serviceUUID: CBUUID,
+        options: GATTOperationOptions
     ) async throws -> CharacteristicRepresenting {
-        let service = try await resolveService(serviceUUID)
-
-        if let cached = characteristicCache.characteristic(characteristicUUID, service: serviceUUID) {
+        if let cached = characteristicCache.characteristic(
+            characteristicUUID,
+            service: serviceUUID
+        ) {
             return cached
         }
 
-        return try await withCheckedThrowingContinuation { continuation in
-            peripheral.onCharacteristicsDiscovered = { discoveredService, characteristics, error in
-                guard discoveredService.uuid == serviceUUID else { return }
-                if let error {
-                    _ = error
-                    continuation.resume(
-                        throwing: BLEError.characteristicNotFound(characteristicUUID, service: serviceUUID)
-                    )
-                    return
-                }
-
-                self.characteristicCache.store(characteristics: characteristics, serviceUUID: serviceUUID)
-                guard let characteristic = self.characteristicCache.characteristic(
-                    characteristicUUID,
-                    service: serviceUUID
-                ) else {
-                    continuation.resume(
-                        throwing: BLEError.characteristicNotFound(characteristicUUID, service: serviceUUID)
-                    )
-                    return
-                }
-                continuation.resume(returning: characteristic)
-            }
-            peripheral.discoverCharacteristics([characteristicUUID], for: service)
+        emit(.discoveringServices)
+        let service = try await resolveService(serviceUUID, options: options)
+        let event = try await operationCoordinator.perform(
+            key: .characteristicDiscovery(serviceUUID: serviceUUID),
+            timeout: options.timeout
+        ) {
+            self.peripheral.discoverCharacteristics(
+                [characteristicUUID],
+                for: service
+            )
         }
+
+        guard case let .characteristicsDiscovered(
+            discoveredService,
+            characteristics,
+            error
+        ) = event,
+        discoveredService.uuid == serviceUUID else {
+            throw BLEError.characteristicNotFound(
+                characteristicUUID,
+                service: serviceUUID
+            )
+        }
+        if error != nil {
+            throw BLEError.characteristicNotFound(
+                characteristicUUID,
+                service: serviceUUID
+            )
+        }
+
+        characteristicCache.store(
+            characteristics: characteristics,
+            serviceUUID: serviceUUID
+        )
+        guard let characteristic = characteristicCache.characteristic(
+            characteristicUUID,
+            service: serviceUUID
+        ) else {
+            throw BLEError.characteristicNotFound(
+                characteristicUUID,
+                service: serviceUUID
+            )
+        }
+        emit(.ready)
+        return characteristic
     }
 
-    private func resolveService(_ serviceUUID: CBUUID) async throws -> ServiceRepresenting {
+    private func resolveService(
+        _ serviceUUID: CBUUID,
+        options: GATTOperationOptions
+    ) async throws -> ServiceRepresenting {
         if let cached = characteristicCache.service(for: serviceUUID) {
             return cached
         }
 
-        return try await withCheckedThrowingContinuation { continuation in
-            peripheral.onServicesDiscovered = { services, error in
-                if let error {
-                    _ = error
-                    continuation.resume(throwing: BLEError.serviceNotFound(serviceUUID))
-                    return
-                }
+        let event = try await operationCoordinator.perform(
+            key: .serviceDiscovery,
+            timeout: options.timeout
+        ) {
+            self.peripheral.discoverServices([serviceUUID])
+        }
 
-                self.characteristicCache.store(services: services)
-                guard let service = self.characteristicCache.service(for: serviceUUID) else {
-                    continuation.resume(throwing: BLEError.serviceNotFound(serviceUUID))
+        guard case let .servicesDiscovered(services, error) = event,
+              error == nil else {
+            throw BLEError.serviceNotFound(serviceUUID)
+        }
+        characteristicCache.store(services: services)
+        guard let service = characteristicCache.service(for: serviceUUID) else {
+            throw BLEError.serviceNotFound(serviceUUID)
+        }
+        return service
+    }
+
+    private func validateWriteSupport(
+        _ characteristic: CharacteristicRepresenting,
+        characteristicUUID: CBUUID,
+        type: CBCharacteristicWriteType
+    ) throws {
+        let requiredProperty: CBCharacteristicProperties = type == .withResponse
+            ? .write
+            : .writeWithoutResponse
+        guard characteristic.properties.contains(requiredProperty) else {
+            throw BLEError.unsupportedCharacteristicOperation(
+                characteristicUUID,
+                operation: .write
+            )
+        }
+    }
+
+    private func waitUntilReadyToWriteWithoutResponse(
+        options: GATTOperationOptions
+    ) async throws {
+        guard !peripheral.canSendWriteWithoutResponse else {
+            return
+        }
+
+        _ = try await operationCoordinator.perform(
+            key: .writeWithoutResponseReady,
+            timeout: options.timeout
+        ) {}
+    }
+
+    private func setNotifications(
+        _ enabled: Bool,
+        characteristic: CharacteristicRepresenting,
+        id: GATTCharacteristicID,
+        options: GATTOperationOptions
+    ) async throws {
+        let event = try await operationCoordinator.perform(
+            key: .notificationSetup(id),
+            timeout: options.timeout
+        ) {
+            self.peripheral.setNotifyValue(enabled, for: characteristic)
+        }
+
+        guard case let .notificationStateUpdated(_, error) = event else {
+            throw BLEError.notificationSetupFailed(
+                id.characteristicUUID,
+                underlying: nil
+            )
+        }
+        if let error {
+            throw BLEError.notificationSetupFailed(
+                id.characteristicUUID,
+                underlying: String(describing: error)
+            )
+        }
+    }
+
+    private func notificationTerminated(
+        subscriberID: UUID,
+        id: GATTCharacteristicID,
+        options: GATTOperationOptions
+    ) {
+        guard let characteristic = notificationRegistry.remove(
+            subscriberID: subscriberID,
+            from: id
+        ) else {
+            return
+        }
+
+        Task { [weak self] in
+            guard let self, self.isConnected else { return }
+            try? await self.operationQueue.run {
+                guard !self.notificationRegistry.hasSubscribers(for: id) else {
                     return
                 }
-                continuation.resume(returning: service)
+                try await self.setNotifications(
+                    false,
+                    characteristic: characteristic,
+                    id: id,
+                    options: options
+                )
             }
-            peripheral.discoverServices([serviceUUID])
         }
     }
 }

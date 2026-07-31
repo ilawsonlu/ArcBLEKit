@@ -1,8 +1,12 @@
+#if compiler(>=5.6)
+@preconcurrency import CoreBluetooth
+#else
 import CoreBluetooth
+#endif
 import Foundation
 @testable import ArcBLEKit
 
-final class FakeCentralManager: CentralManaging {
+final class FakeCentralManager: CentralManaging, @unchecked Sendable {
     var state: BluetoothState
     var onStateChange: ((BluetoothState) -> Void)?
     var onDiscover: ((PeripheralRepresenting, BLEAdvertisement, Int) -> Void)?

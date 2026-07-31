@@ -11,6 +11,8 @@ struct ContentView: View {
                 devicesSection
                 reconnectSection
                 statusSection
+                gattSection
+                notificationSection
                 logSection
             }
             .navigationTitle("ArcBLE Sample")
@@ -97,6 +99,83 @@ struct ContentView: View {
         }
     }
 
+    private var gattSection: some View {
+        Section(header: Text("GATT Operations")) {
+            uuidField(
+                "Read Characteristic UUID",
+                text: $viewModel.readCharacteristicUUIDText
+            )
+
+            HStack {
+                Text("Last Read")
+                Spacer()
+                Text(viewModel.lastReadText)
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.trailing)
+            }
+
+            Button(action: viewModel.readValue) {
+                Label("Read Value", systemImage: "arrow.down.doc")
+            }
+            .disabled(viewModel.connectedDeviceID == nil)
+
+            uuidField(
+                "Write Characteristic UUID",
+                text: $viewModel.writeCharacteristicUUIDText
+            )
+            TextField("Hex Payload", text: $viewModel.writePayloadHex)
+                .autocapitalization(.allCharacters)
+                .disableAutocorrection(true)
+                .font(.system(.body, design: .monospaced))
+
+            Picker("Write Mode", selection: $viewModel.writeWithResponse) {
+                Text("With Response").tag(true)
+                Text("Without Response").tag(false)
+            }
+            .pickerStyle(SegmentedPickerStyle())
+
+            Button(action: viewModel.writeValue) {
+                Label("Send Value", systemImage: "paperplane")
+            }
+            .disabled(viewModel.connectedDeviceID == nil)
+        }
+    }
+
+    private var notificationSection: some View {
+        Section(header: Text("Notifications")) {
+            uuidField(
+                "Notify Characteristic UUID",
+                text: $viewModel.notifyCharacteristicUUIDText
+            )
+
+            HStack {
+                Text("Latest")
+                Spacer()
+                Text(viewModel.latestNotificationText)
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.trailing)
+            }
+
+            Button(
+                action: {
+                    if viewModel.isSubscribed {
+                        viewModel.stopNotifications()
+                    } else {
+                        viewModel.startNotifications()
+                    }
+                }
+            ) {
+                Label(
+                    viewModel.isSubscribed ? "Stop Notifications" : "Start Notifications",
+                    systemImage: viewModel.isSubscribed ? "bell.slash" : "bell"
+                )
+            }
+            .disabled(viewModel.connectedDeviceID == nil)
+        }
+    }
+
     private var logSection: some View {
         Section(header: Text("Log")) {
             ForEach(viewModel.logs, id: \.self) { line in
@@ -113,6 +192,16 @@ struct ContentView: View {
         } else {
             viewModel.startScan()
         }
+    }
+
+    private func uuidField(
+        _ title: String,
+        text: Binding<String>
+    ) -> some View {
+        TextField(title, text: text)
+            .autocapitalization(.allCharacters)
+            .disableAutocorrection(true)
+            .font(.system(.body, design: .monospaced))
     }
 }
 

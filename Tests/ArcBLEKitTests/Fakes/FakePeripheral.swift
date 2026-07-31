@@ -1,8 +1,12 @@
+#if compiler(>=5.6)
+@preconcurrency import CoreBluetooth
+#else
 import CoreBluetooth
+#endif
 import Foundation
 @testable import ArcBLEKit
 
-final class FakeService: ServiceRepresenting {
+final class FakeService: ServiceRepresenting, @unchecked Sendable {
     let uuid: CBUUID
 
     init(uuid: CBUUID) {
@@ -10,30 +14,45 @@ final class FakeService: ServiceRepresenting {
     }
 }
 
-final class FakeCharacteristic: CharacteristicRepresenting {
+final class FakeCharacteristic: CharacteristicRepresenting, @unchecked Sendable {
     let uuid: CBUUID
     let serviceUUID: CBUUID
+    let properties: CBCharacteristicProperties
+    var isNotifying: Bool
 
-    init(uuid: CBUUID, serviceUUID: CBUUID) {
+    init(
+        uuid: CBUUID,
+        serviceUUID: CBUUID,
+        properties: CBCharacteristicProperties = [
+            .read,
+            .write,
+            .writeWithoutResponse,
+            .notify
+        ],
+        isNotifying: Bool = false
+    ) {
         self.uuid = uuid
         self.serviceUUID = serviceUUID
+        self.properties = properties
+        self.isNotifying = isNotifying
     }
 }
 
-final class FakePeripheral: PeripheralRepresenting {
+final class FakePeripheral: PeripheralRepresenting, @unchecked Sendable {
     let identifier: UUID
     let name: String?
 
-    var onServicesDiscovered: (([ServiceRepresenting], Error?) -> Void)?
-    var onCharacteristicsDiscovered: ((ServiceRepresenting, [CharacteristicRepresenting], Error?) -> Void)?
-    var onValueRead: ((CharacteristicRepresenting, Data?, Error?) -> Void)?
-    var onValueWritten: ((CharacteristicRepresenting, Error?) -> Void)?
-    var onNotificationStateUpdated: ((CharacteristicRepresenting, Error?) -> Void)?
-    var onNotificationValue: ((CharacteristicRepresenting, Data) -> Void)?
+    var canSendWriteWithoutResponse = true
+    var maximumWriteLength = 512
+    var onEvent: ((PeripheralEvent) -> Void)?
 
     private(set) var discoveredServiceUUIDs: [CBUUID]?
     private(set) var discoveredCharacteristicUUIDs: [CBUUID]?
     private(set) var discoveredCharacteristicsForServiceUUID: CBUUID?
+    private(set) var serviceDiscoveryRequests: [[CBUUID]?] = []
+    private(set) var characteristicDiscoveryRequests: [
+        (characteristics: [CBUUID]?, service: CBUUID)
+    ] = []
     private(set) var readCharacteristics: [CBUUID] = []
     private(set) var writtenValues: [(data: Data, characteristic: CBUUID, type: CBCharacteristicWriteType)] = []
     private(set) var notifyChanges: [(enabled: Bool, characteristic: CBUUID)] = []
@@ -45,11 +64,15 @@ final class FakePeripheral: PeripheralRepresenting {
 
     func discoverServices(_ serviceUUIDs: [CBUUID]?) {
         discoveredServiceUUIDs = serviceUUIDs
+        serviceDiscoveryRequests.append(serviceUUIDs)
     }
 
     func discoverCharacteristics(_ characteristicUUIDs: [CBUUID]?, for service: ServiceRepresenting) {
         discoveredCharacteristicUUIDs = characteristicUUIDs
         discoveredCharacteristicsForServiceUUID = service.uuid
+        characteristicDiscoveryRequests.append(
+            (characteristicUUIDs, service.uuid)
+        )
     }
 
     func readValue(for characteristic: CharacteristicRepresenting) {
@@ -64,8 +87,12 @@ final class FakePeripheral: PeripheralRepresenting {
         notifyChanges.append((enabled, characteristic.uuid))
     }
 
+    func maximumWriteValueLength(for type: CBCharacteristicWriteType) -> Int {
+        maximumWriteLength
+    }
+
     func completeServiceDiscovery(_ services: [ServiceRepresenting], error: Error? = nil) {
-        onServicesDiscovered?(services, error)
+        onEvent?(.servicesDiscovered(services, error))
     }
 
     func completeCharacteristicDiscovery(
@@ -73,22 +100,30 @@ final class FakePeripheral: PeripheralRepresenting {
         characteristics: [CharacteristicRepresenting],
         error: Error? = nil
     ) {
-        onCharacteristicsDiscovered?(service, characteristics, error)
+        onEvent?(.characteristicsDiscovered(service, characteristics, error))
     }
 
     func completeRead(characteristic: CharacteristicRepresenting, data: Data?, error: Error? = nil) {
-        onValueRead?(characteristic, data, error)
+        onEvent?(.valueUpdated(characteristic, data, error))
     }
 
     func completeWrite(characteristic: CharacteristicRepresenting, error: Error? = nil) {
-        onValueWritten?(characteristic, error)
+        onEvent?(.valueWritten(characteristic, error))
     }
 
     func completeNotifySetup(characteristic: CharacteristicRepresenting, error: Error? = nil) {
-        onNotificationStateUpdated?(characteristic, error)
+        if error == nil, let characteristic = characteristic as? FakeCharacteristic {
+            characteristic.isNotifying = notifyChanges.last?.enabled ?? false
+        }
+        onEvent?(.notificationStateUpdated(characteristic, error))
     }
 
     func emitNotification(characteristic: CharacteristicRepresenting, data: Data) {
-        onNotificationValue?(characteristic, data)
+        onEvent?(.valueUpdated(characteristic, data, nil))
+    }
+
+    func becomeReadyToWriteWithoutResponse() {
+        canSendWriteWithoutResponse = true
+        onEvent?(.readyToWriteWithoutResponse)
     }
 }

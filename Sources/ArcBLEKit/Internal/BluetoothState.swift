@@ -4,7 +4,7 @@
 import CoreBluetooth
 #endif
 
-enum BluetoothState: Equatable {
+public enum BluetoothState: Equatable, Sendable {
     case unknown
     case resetting
     case unsupported

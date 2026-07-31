@@ -1,44 +1,78 @@
-actor AsyncSemaphore {
-    private var permits: Int
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+import Foundation
 
-    init(value: Int) {
-        self.permits = value
+actor SessionOperationQueue {
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Void, Error>
     }
 
-    func wait() async {
-        if permits > 0 {
-            permits -= 1
+    private var currentID: UUID?
+    private var waiters: [Waiter] = []
+
+    func run<T>(_ operation: () async throws -> T) async throws -> T {
+        let id = UUID()
+        try await acquire(id: id)
+
+        do {
+            try Task.checkCancellation()
+            let value = try await operation()
+            release(id: id)
+            return value
+        } catch is CancellationError {
+            release(id: id)
+            throw BLEError.operationCancelled
+        } catch {
+            release(id: id)
+            throw error
+        }
+    }
+
+    func cancelAll(with error: Error) {
+        let queued = waiters
+        waiters.removeAll()
+        for waiter in queued {
+            waiter.continuation.resume(throwing: error)
+        }
+    }
+
+    private func acquire(id: UUID) async throws {
+        if currentID == nil {
+            currentID = id
             return
         }
 
-        await withCheckedContinuation { continuation in
-            waiters.append(continuation)
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<Void, Error>) in
+                waiters.append(Waiter(id: id, continuation: continuation))
+            }
+        } onCancel: {
+            Task {
+                await self.cancelWaiter(id: id)
+            }
         }
     }
 
-    func signal() {
-        if waiters.isEmpty {
-            permits += 1
-        } else {
-            waiters.removeFirst().resume()
+    private func release(id: UUID) {
+        guard currentID == id else {
+            return
         }
+
+        guard !waiters.isEmpty else {
+            currentID = nil
+            return
+        }
+
+        let next = waiters.removeFirst()
+        currentID = next.id
+        next.continuation.resume()
     }
-}
 
-final class SessionOperationQueue {
-    private let semaphore = AsyncSemaphore(value: 1)
-
-    func run<T>(_ operation: () async throws -> T) async throws -> T {
-        await semaphore.wait()
-
-        do {
-            let value = try await operation()
-            await semaphore.signal()
-            return value
-        } catch {
-            await semaphore.signal()
-            throw error
+    private func cancelWaiter(id: UUID) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else {
+            return
         }
+        let waiter = waiters.remove(at: index)
+        waiter.continuation.resume(throwing: BLEError.operationCancelled)
     }
 }

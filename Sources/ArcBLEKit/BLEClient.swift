@@ -1,9 +1,9 @@
 import Foundation
 
-public final class BLEClient {
+public final class BLEClient: @unchecked Sendable {
     private struct ActiveConnection {
         let id: UUID
-        let cancel: () -> Void
+        let cancel: @Sendable () -> Void
     }
 
     public struct Configuration: Sendable {
@@ -18,11 +18,33 @@ public final class BLEClient {
     private let lock = NSLock()
     private let scanLock = NSLock()
     private let connectionLock = NSLock()
+    private let stateLock = NSLock()
     private var peripheralsByIdentifier: [UUID: PeripheralRepresenting] = [:]
     private var sessionsByIdentifier: [UUID: PeripheralSession] = [:]
     private var activeScanID: UUID?
-    private var activeScanContinuation: AsyncStream<BLEDevice>.Continuation?
+    private var activeScanContinuation: AsyncThrowingStream<BLEDevice, Error>.Continuation?
     private var activeConnection: ActiveConnection?
+    private var stateContinuations: [
+        UUID: AsyncStream<BluetoothState>.Continuation
+    ] = [:]
+
+    public var bluetoothState: BluetoothState {
+        central.state
+    }
+
+    public var bluetoothStates: AsyncStream<BluetoothState> {
+        let id = UUID()
+        return AsyncStream { continuation in
+            stateLock.lock()
+            stateContinuations[id] = continuation
+            stateLock.unlock()
+
+            continuation.yield(central.state)
+            continuation.onTermination = { [weak self] _ in
+                self?.removeStateContinuation(id: id)
+            }
+        }
+    }
 
     public convenience init(configuration: Configuration = .init()) {
         self.init(central: CentralManagerBox(configuration: configuration))
@@ -30,6 +52,9 @@ public final class BLEClient {
 
     init(central: CentralManaging) {
         self.central = central
+        self.central.onStateChange = { [weak self] state in
+            self?.publishBluetoothState(state)
+        }
         self.central.onDisconnect = { [weak self] peripheral, error in
             self?.session(identifier: peripheral.identifier)?.handleDisconnect(error: error)
         }
@@ -49,14 +74,27 @@ public final class BLEClient {
 
     func remember(_ session: PeripheralSession) {
         lock.lock()
-        defer { lock.unlock() }
+        let previousSession = sessionsByIdentifier[session.device.id]
         sessionsByIdentifier[session.device.id] = session
+        lock.unlock()
+
+        if let previousSession, previousSession !== session {
+            previousSession.invalidate()
+        }
     }
 
     func session(identifier: UUID) -> PeripheralSession? {
         lock.lock()
         defer { lock.unlock() }
         return sessionsByIdentifier[identifier]
+    }
+
+    func remove(_ session: PeripheralSession) {
+        lock.lock()
+        if sessionsByIdentifier[session.device.id] === session {
+            sessionsByIdentifier[session.device.id] = nil
+        }
+        lock.unlock()
     }
 
     func validateBluetoothReady() throws {
@@ -77,7 +115,7 @@ public final class BLEClient {
     func startScan(
         id: UUID,
         filter: ScanFilter,
-        continuation: AsyncStream<BLEDevice>.Continuation
+        continuation: AsyncThrowingStream<BLEDevice, Error>.Continuation
     ) {
         scanLock.lock()
         let previousContinuation = activeScanContinuation
@@ -129,9 +167,9 @@ public final class BLEClient {
     func startConnection(
         id: UUID,
         peripheral: PeripheralRepresenting,
-        onSuperseded: @escaping () -> Void,
-        onConnect: @escaping (PeripheralRepresenting) -> Void,
-        onFailToConnect: @escaping (PeripheralRepresenting, Error?) -> Void
+        onSuperseded: @escaping @Sendable () -> Void,
+        onConnect: @escaping @Sendable (PeripheralRepresenting) -> Void,
+        onFailToConnect: @escaping @Sendable (PeripheralRepresenting, Error?) -> Void
     ) {
         connectionLock.lock()
         let previousConnection = activeConnection
@@ -186,5 +224,21 @@ public final class BLEClient {
         }
 
         return UInt64(nanoseconds)
+    }
+
+    private func publishBluetoothState(_ state: BluetoothState) {
+        stateLock.lock()
+        let continuations = Array(stateContinuations.values)
+        stateLock.unlock()
+
+        for continuation in continuations {
+            continuation.yield(state)
+        }
+    }
+
+    private func removeStateContinuation(id: UUID) {
+        stateLock.lock()
+        stateContinuations[id] = nil
+        stateLock.unlock()
     }
 }

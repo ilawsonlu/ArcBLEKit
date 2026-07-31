@@ -5,7 +5,7 @@ import CoreBluetooth
 #endif
 import Foundation
 
-final class CentralManagerBox: NSObject, CentralManaging {
+final class CentralManagerBox: NSObject, CentralManaging, @unchecked Sendable {
     private var manager: CBCentralManager!
     private var boxesByIdentifier: [UUID: PeripheralBox] = [:]
 

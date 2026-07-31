@@ -2,10 +2,10 @@ import Foundation
 
 final class CancellationHandlerBox: @unchecked Sendable {
     private let lock = NSLock()
-    private var handler: (() -> Void)?
+    private var handler: (@Sendable () -> Void)?
     private var cancelled = false
 
-    func set(_ handler: @escaping () -> Void) {
+    func set(_ handler: @escaping @Sendable () -> Void) {
         lock.lock()
         if cancelled {
             lock.unlock()

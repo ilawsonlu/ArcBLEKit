@@ -1,4 +1,8 @@
+#if compiler(>=5.6)
+@preconcurrency import CoreBluetooth
+#else
 import CoreBluetooth
+#endif
 import XCTest
 @testable import ArcBLEKit
 
@@ -42,7 +46,7 @@ final class BLEClientScanTests: XCTestCase {
             rssi: -45
         )
 
-        let device = await iterator.next()
+        let device = try await iterator.next()
         XCTAssertEqual(device?.id, id)
         XCTAssertEqual(device?.name, "Arc Sensor")
         XCTAssertEqual(device?.rssi, -45)
@@ -50,7 +54,7 @@ final class BLEClientScanTests: XCTestCase {
         XCTAssertTrue(client.rememberedPeripheral(identifier: id) === peripheral)
     }
 
-    func testScanFiltersByPeripheralIdentifierNamePrefixAndManufacturerData() async {
+    func testScanFiltersByPeripheralIdentifierNamePrefixAndManufacturerData() async throws {
         let central = FakeCentralManager()
         let client = BLEClient(central: central)
         let matchingID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
@@ -103,14 +107,14 @@ final class BLEClientScanTests: XCTestCase {
             rssi: -40
         )
 
-        let device = await iterator.next()
+        let device = try await iterator.next()
         XCTAssertEqual(device?.id, matchingID)
     }
 
     func testCancellingScanIteratorStopsCentralScan() async {
         let central = FakeCentralManager()
         let client = BLEClient(central: central)
-        var stream: AsyncStream<BLEDevice>? = client.scan(filter: ScanFilter())
+        var stream: AsyncThrowingStream<BLEDevice, Error>? = client.scan(filter: ScanFilter())
         _ = stream?.makeAsyncIterator()
 
         stream = nil
@@ -120,17 +124,17 @@ final class BLEClientScanTests: XCTestCase {
         XCTAssertEqual(central.stopScanCallCount, 1)
     }
 
-    func testStartingSecondScanFinishesFirstScanWithoutStoppingSecondScan() async {
+    func testStartingSecondScanFinishesFirstScanWithoutStoppingSecondScan() async throws {
         let central = FakeCentralManager()
         let client = BLEClient(central: central)
         var firstIterator = client.scan(filter: ScanFilter(namePrefix: "First")).makeAsyncIterator()
-        let firstNext = Task { await firstIterator.next() }
+        let firstNext = Task { try await firstIterator.next() }
 
         let secondStream = client.scan(filter: ScanFilter(namePrefix: "Second"))
         var secondIterator = secondStream.makeAsyncIterator()
         let secondPeripheral = FakePeripheral(name: "Second Device")
 
-        let firstResult = await firstNext.value
+        let firstResult = try await firstNext.value
         XCTAssertNil(firstResult)
         XCTAssertFalse(central.didStopScan)
         XCTAssertEqual(central.stopScanCallCount, 0)
@@ -145,7 +149,7 @@ final class BLEClientScanTests: XCTestCase {
             rssi: -50
         )
 
-        let device = await secondIterator.next()
+        let device = try await secondIterator.next()
         XCTAssertEqual(device?.name, "Second Device")
     }
 
@@ -154,9 +158,12 @@ final class BLEClientScanTests: XCTestCase {
         let client = BLEClient(central: central)
         var iterator = client.scan(filter: ScanFilter()).makeAsyncIterator()
 
-        let device = await iterator.next()
-
-        XCTAssertNil(device)
+        do {
+            _ = try await iterator.next()
+            XCTFail("Expected bluetoothPoweredOff")
+        } catch {
+            XCTAssertEqual(error as? BLEError, .bluetoothPoweredOff)
+        }
         XCTAssertNil(central.scannedServiceUUIDs)
     }
 }

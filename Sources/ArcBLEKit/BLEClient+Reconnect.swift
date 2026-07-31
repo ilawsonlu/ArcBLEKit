@@ -1,17 +1,33 @@
 import Foundation
 
-private final class ConnectionAttempt {
+private final class ConnectionAttempt: @unchecked Sendable {
     private let lock = NSLock()
     private var completed = false
+    private var timeoutTask: Task<Void, Never>?
 
-    func finish(_ body: () -> Void) {
+    func installTimeoutTask(_ task: Task<Void, Never>) {
+        lock.lock()
+        guard !completed else {
+            lock.unlock()
+            task.cancel()
+            return
+        }
+        timeoutTask = task
+        lock.unlock()
+    }
+
+    func finish(_ body: @Sendable () -> Void) {
         lock.lock()
         guard !completed else {
             lock.unlock()
             return
         }
         completed = true
+        let timeoutTask = timeoutTask
+        self.timeoutTask = nil
         lock.unlock()
+
+        timeoutTask?.cancel()
         body()
     }
 }
@@ -62,8 +78,40 @@ public extension BLEClient {
         device: BLEDevice,
         options: ConnectionOptions
     ) async throws -> PeripheralSession {
+        let connectedPeripheral = try await establishConnection(
+            peripheral: peripheral,
+            timeout: options.timeout
+        )
+        remember(connectedPeripheral)
+
+        let session = PeripheralSession(
+            device: device,
+            peripheral: connectedPeripheral,
+            central: central,
+            options: options,
+            reconnectAction: { [weak self] in
+                guard let self else {
+                    throw BLEError.bluetoothUnavailable
+                }
+                return try await self.establishConnection(
+                    peripheral: connectedPeripheral,
+                    timeout: options.timeout
+                )
+            },
+            onTermination: { [weak self] session in
+                self?.remove(session)
+            }
+        )
+        remember(session)
+        return session
+    }
+
+    private func establishConnection(
+        peripheral: PeripheralRepresenting,
+        timeout: TimeInterval
+    ) async throws -> PeripheralRepresenting {
         try validateBluetoothReady()
-        guard let timeoutNanoseconds = timeoutNanoseconds(options.timeout) else {
+        guard let timeoutNanoseconds = timeoutNanoseconds(timeout) else {
             throw BLEError.connectionTimedOut(peripheral.identifier)
         }
 
@@ -73,52 +121,27 @@ public extension BLEClient {
 
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                var timeoutTask: Task<Void, Never>?
-
-                let cancelConnection = {
+                let cancelConnection: @Sendable () -> Void = {
                     attempt.finish {
-                        timeoutTask?.cancel()
                         _ = self.finishConnection(id: connectionID)
                         self.central.cancelPeripheralConnection(peripheral)
                         continuation.resume(throwing: BLEError.operationCancelled)
                     }
                 }
 
-                timeoutTask = Task {
-                    try? await Task.sleep(nanoseconds: timeoutNanoseconds)
-                    attempt.finish {
-                        let ownsConnection = self.finishConnection(id: connectionID)
-                        self.central.cancelPeripheralConnection(peripheral)
-                        continuation.resume(
-                            throwing: ownsConnection
-                                ? BLEError.connectionTimedOut(peripheral.identifier)
-                                : BLEError.operationCancelled
-                        )
-                    }
-                }
-
                 startConnection(id: connectionID, peripheral: peripheral, onSuperseded: cancelConnection) { connectedPeripheral in
                     guard connectedPeripheral.identifier == peripheral.identifier else { return }
                     attempt.finish {
-                        timeoutTask?.cancel()
                         guard self.finishConnection(id: connectionID) else {
                             self.central.cancelPeripheralConnection(connectedPeripheral)
                             continuation.resume(throwing: BLEError.operationCancelled)
                             return
                         }
-                        let session = PeripheralSession(
-                            device: device,
-                            peripheral: connectedPeripheral,
-                            central: self.central,
-                            options: options
-                        )
-                        self.remember(session)
-                        continuation.resume(returning: session)
+                        continuation.resume(returning: connectedPeripheral)
                     }
                 } onFailToConnect: { failedPeripheral, error in
                     guard failedPeripheral.identifier == peripheral.identifier else { return }
                     attempt.finish {
-                        timeoutTask?.cancel()
                         guard self.finishConnection(id: connectionID) else {
                             continuation.resume(throwing: BLEError.operationCancelled)
                             return
@@ -132,6 +155,23 @@ public extension BLEClient {
                     }
                 }
 
+                let timeoutTask = Task {
+                    do {
+                        try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                    } catch {
+                        return
+                    }
+                    attempt.finish {
+                        let ownsConnection = self.finishConnection(id: connectionID)
+                        self.central.cancelPeripheralConnection(peripheral)
+                        continuation.resume(
+                            throwing: ownsConnection
+                                ? BLEError.connectionTimedOut(peripheral.identifier)
+                                : BLEError.operationCancelled
+                        )
+                    }
+                }
+                attempt.installTimeoutTask(timeoutTask)
                 cancellation.set(cancelConnection)
             }
         } onCancel: {

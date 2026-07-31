@@ -1,30 +1,67 @@
 import Foundation
 
-private final class FindDeviceAttempt {
+private final class FindDeviceAttempt: @unchecked Sendable {
     private let lock = NSLock()
     private var completed = false
+    private var scanTask: Task<Void, Never>?
+    private var timeoutTask: Task<Void, Never>?
 
-    func finish(_ body: () -> Void) {
+    func installScanTask(_ task: Task<Void, Never>) {
+        install(task, isScanTask: true)
+    }
+
+    func installTimeoutTask(_ task: Task<Void, Never>) {
+        install(task, isScanTask: false)
+    }
+
+    func finish(_ body: @Sendable () -> Void) {
         lock.lock()
         guard !completed else {
             lock.unlock()
             return
         }
         completed = true
+        let scanTask = scanTask
+        let timeoutTask = timeoutTask
+        self.scanTask = nil
+        self.timeoutTask = nil
         lock.unlock()
+
+        scanTask?.cancel()
+        timeoutTask?.cancel()
         body()
+    }
+
+    private func install(
+        _ task: Task<Void, Never>,
+        isScanTask: Bool
+    ) {
+        lock.lock()
+        guard !completed else {
+            lock.unlock()
+            task.cancel()
+            return
+        }
+        if isScanTask {
+            scanTask = task
+        } else {
+            timeoutTask = task
+        }
+        lock.unlock()
     }
 }
 
 public extension BLEClient {
-    func scan(filter: ScanFilter) -> AsyncStream<BLEDevice> {
-        AsyncStream { continuation in
+    func scan(
+        filter: ScanFilter
+    ) -> AsyncThrowingStream<BLEDevice, Error> {
+        AsyncThrowingStream { continuation in
             let scanID = UUID()
 
             do {
                 try validateBluetoothReady()
             } catch {
-                continuation.finish()
+                continuation.finish(throwing: error)
                 return
             }
 
@@ -47,7 +84,7 @@ public extension BLEClient {
         }
 
         let scanID = UUID()
-        let stream = AsyncStream<BLEDevice> { continuation in
+        let stream = AsyncThrowingStream<BLEDevice, Error> { continuation in
             startScan(id: scanID, filter: filter, continuation: continuation)
             continuation.onTermination = { [weak self] _ in
                 guard let self else { return }
@@ -59,35 +96,43 @@ public extension BLEClient {
 
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                var scanTask: Task<Void, Never>?
-                var timeoutTask: Task<Void, Never>?
-
-                scanTask = Task {
-                    let device = await firstDevice(in: stream)
-                    attempt.finish {
-                        timeoutTask?.cancel()
-                        self.finishScan(id: scanID)
-                        if let device {
-                            continuation.resume(returning: device)
-                        } else {
-                            continuation.resume(throwing: BLEError.scanTimedOut)
+                let scanTask = Task {
+                    do {
+                        let device = try await firstDevice(in: stream)
+                        attempt.finish {
+                            self.finishScan(id: scanID)
+                            if let device {
+                                continuation.resume(returning: device)
+                            } else {
+                                continuation.resume(
+                                    throwing: BLEError.scanTimedOut
+                                )
+                            }
+                        }
+                    } catch {
+                        attempt.finish {
+                            self.finishScan(id: scanID)
+                            continuation.resume(throwing: error)
                         }
                     }
                 }
+                attempt.installScanTask(scanTask)
 
-                timeoutTask = Task {
-                    try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                let timeoutTask = Task {
+                    do {
+                        try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                    } catch {
+                        return
+                    }
                     attempt.finish {
-                        scanTask?.cancel()
                         self.finishScan(id: scanID)
                         continuation.resume(throwing: BLEError.scanTimedOut)
                     }
                 }
+                attempt.installTimeoutTask(timeoutTask)
 
                 cancellation.set {
                     attempt.finish {
-                        scanTask?.cancel()
-                        timeoutTask?.cancel()
                         self.finishScan(id: scanID)
                         continuation.resume(throwing: BLEError.operationCancelled)
                     }
@@ -98,8 +143,10 @@ public extension BLEClient {
         }
     }
 
-    private func firstDevice(in stream: AsyncStream<BLEDevice>) async -> BLEDevice? {
+    private func firstDevice(
+        in stream: AsyncThrowingStream<BLEDevice, Error>
+    ) async throws -> BLEDevice? {
         var iterator = stream.makeAsyncIterator()
-        return await iterator.next()
+        return try await iterator.next()
     }
 }
