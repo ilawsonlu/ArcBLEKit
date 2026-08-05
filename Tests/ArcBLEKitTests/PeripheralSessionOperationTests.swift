@@ -226,6 +226,65 @@ final class PeripheralSessionOperationTests: XCTestCase {
         }
     }
 
+    func testNotificationsRejectCharacteristicWithoutNotifyOrIndicateByDefault() async {
+        let serviceUUID = CBUUID(string: "FFF0")
+        let characteristicUUID = CBUUID(string: "FFF3")
+        let peripheral = FakePeripheral()
+        let session = makeSession(peripheral: peripheral)
+        let characteristic = FakeCharacteristic(
+            uuid: characteristicUUID,
+            serviceUUID: serviceUUID,
+            properties: [.read]
+        )
+        cache(characteristic, serviceUUID: serviceUUID, in: session)
+
+        do {
+            _ = try await session.notifications(
+                for: characteristicUUID,
+                service: serviceUUID
+            )
+            XCTFail("Expected unsupportedCharacteristicOperation")
+        } catch {
+            XCTAssertEqual(
+                error as? BLEError,
+                .unsupportedCharacteristicOperation(
+                    characteristicUUID,
+                    operation: .notificationSetup
+                )
+            )
+        }
+
+        XCTAssertTrue(peripheral.notifyChanges.isEmpty)
+    }
+
+    func testNotificationsCanIgnoreUnsupportedPropertiesForCompatibility() async throws {
+        let serviceUUID = CBUUID(string: "FFF0")
+        let characteristicUUID = CBUUID(string: "FFF3")
+        let peripheral = FakePeripheral()
+        let session = makeSession(peripheral: peripheral)
+        let characteristic = FakeCharacteristic(
+            uuid: characteristicUUID,
+            serviceUUID: serviceUUID,
+            properties: [.read]
+        )
+        cache(characteristic, serviceUUID: serviceUUID, in: session)
+
+        let task = Task {
+            try await session.notifications(
+                for: characteristicUUID,
+                service: serviceUUID,
+                allowUnsupportedProperties: true
+            )
+        }
+
+        await waitForNotifyChange(on: peripheral)
+        XCTAssertEqual(peripheral.notifyChanges.first?.enabled, true)
+        peripheral.completeNotifySetup(characteristic: characteristic)
+
+        _ = try await task.value
+        await session.disconnect()
+    }
+
     func testWriteWithoutResponseReturnsWithoutWaitingForWriteCallback() async throws {
         let serviceUUID = CBUUID(string: "FFF0")
         let characteristicUUID = CBUUID(string: "FFF2")

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- Add an opt-in notification compatibility mode for peripherals that omit the `.notify` or `.indicate` characteristic property.
+
 ## 0.2.0
 
 - Breaking: `scan(filter:)` and notification streams now throw operation errors.

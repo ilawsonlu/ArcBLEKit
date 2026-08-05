@@ -121,7 +121,8 @@ public extension PeripheralSession {
     func notifications(
         for characteristicUUID: CBUUID,
         service serviceUUID: CBUUID,
-        options: GATTOperationOptions = .init()
+        options: GATTOperationOptions = .init(),
+        allowUnsupportedProperties: Bool = false
     ) async throws -> AsyncThrowingStream<Data, Error> {
         try ensureConnected()
 
@@ -137,8 +138,9 @@ public extension PeripheralSession {
                 options: options
             )
 
-            guard characteristic.properties.contains(.notify)
-                    || characteristic.properties.contains(.indicate) else {
+            if !allowUnsupportedProperties,
+               !characteristic.properties.contains(.notify),
+               !characteristic.properties.contains(.indicate) {
                 throw BLEError.unsupportedCharacteristicOperation(
                     characteristicUUID,
                     operation: .notificationSetup

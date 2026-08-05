@@ -131,6 +131,20 @@ for try await data in updates {
 
 Notification streams are isolated by service UUID and characteristic UUID. Multiple subscribers to the same characteristic share the underlying CoreBluetooth notification, and active streams are restored after a successful automatic reconnect.
 
+Some non-compliant peripherals support notifications without declaring the
+`.notify` or `.indicate` property. Compatibility mode can bypass only this
+property check while still calling CoreBluetooth's `setNotifyValue(true)`:
+
+```swift
+let updates = try await session.notifications(
+    for: CBUUID(string: "FFF3"),
+    service: CBUUID(string: "FFF0"),
+    allowUnsupportedProperties: true
+)
+```
+
+The default is `false`, so property validation remains strict unless explicitly disabled.
+
 ## Bluetooth and Connection States
 
 ```swift
