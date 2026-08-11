@@ -1,0 +1,55 @@
+name: Bug report
+description: Report reproducible incorrect behavior in ArcBLEKit.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to report a problem.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include the smallest code sample and steps that reproduce the issue.
+      render: swift
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: ArcBLEKit version
+      placeholder: 0.2.2
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the Xcode, Swift, iOS or macOS, and device versions.
+      placeholder: Xcode 26.4, Swift 6.2, iOS 26.4, iPhone 17
+    validations:
+      required: true
+
+  - type: textarea
+    id: peripheral
+    attributes:
+      label: BLE peripheral details
+      description: Describe the peripheral, relevant services and characteristics, and whether the issue reproduces with another device.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or additional context
+      description: Remove secrets and personally identifiable information before posting.
+      render: shell

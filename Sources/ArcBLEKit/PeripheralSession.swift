@@ -1,9 +1,15 @@
 import Foundation
 
+/// An active connection to a BLE peripheral.
+///
+/// A session serializes GATT operations, publishes connection lifecycle events, and owns active
+/// notification subscriptions. Obtain sessions from ``BLEClient/connect(to:options:)`` or
+/// ``BLEClient/reconnect(identifier:fallbackScan:options:)``.
 public final class PeripheralSession: @unchecked Sendable {
     typealias ReconnectAction = () async throws -> PeripheralRepresenting
     typealias TerminationHandler = (PeripheralSession) -> Void
 
+    /// The device snapshot used to create this connection.
     public let device: BLEDevice
     let peripheral: PeripheralRepresenting
     let central: CentralManaging
@@ -23,6 +29,7 @@ public final class PeripheralSession: @unchecked Sendable {
     private var reconnectTask: Task<Void, Never>?
 
     private let stateContinuation: AsyncStream<ConnectionState>.Continuation
+    /// Connection and automatic reconnect lifecycle events.
     public let connectionStates: AsyncStream<ConnectionState>
 
     var isConnected: Bool {
@@ -118,6 +125,9 @@ public final class PeripheralSession: @unchecked Sendable {
         lifecycleLock.unlock()
     }
 
+    /// Ends the session and cancels pending GATT operations and notification streams.
+    ///
+    /// A manual disconnect never starts the automatic reconnect policy.
     public func disconnect() async {
         guard let task = beginManualDisconnect() else {
             return

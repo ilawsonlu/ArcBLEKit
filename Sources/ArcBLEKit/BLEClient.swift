@@ -1,14 +1,25 @@
 import Foundation
 
+/// A Bluetooth Low Energy central that exposes CoreBluetooth operations through Swift Concurrency.
+///
+/// Keep a client alive for the duration of the app's BLE workflow. A client manages one active
+/// scan at a time and creates ``PeripheralSession`` instances for connected peripherals.
 public final class BLEClient: @unchecked Sendable {
     private struct ActiveConnection {
         let id: UUID
         let cancel: @Sendable () -> Void
     }
 
+    /// Options used to create the underlying CoreBluetooth central manager.
     public struct Configuration: Sendable {
+        /// An optional CoreBluetooth restoration identifier.
+        ///
+        /// ArcBLEKit passes this value to CoreBluetooth, but full app-relaunch state restoration
+        /// is not currently implemented.
         public var restoreIdentifier: String?
 
+        /// Creates a client configuration.
+        /// - Parameter restoreIdentifier: An optional CoreBluetooth restoration identifier.
         public init(restoreIdentifier: String? = nil) {
             self.restoreIdentifier = restoreIdentifier
         }
@@ -28,10 +39,12 @@ public final class BLEClient: @unchecked Sendable {
         UUID: AsyncStream<BluetoothState>.Continuation
     ] = [:]
 
+    /// The central manager's latest Bluetooth state.
     public var bluetoothState: BluetoothState {
         central.state
     }
 
+    /// A stream that emits the current Bluetooth state immediately and every subsequent update.
     public var bluetoothStates: AsyncStream<BluetoothState> {
         let id = UUID()
         return AsyncStream { continuation in
@@ -46,6 +59,8 @@ public final class BLEClient: @unchecked Sendable {
         }
     }
 
+    /// Creates a BLE central client.
+    /// - Parameter configuration: CoreBluetooth central manager configuration.
     public convenience init(configuration: Configuration = .init()) {
         self.init(central: CentralManagerBox(configuration: configuration))
     }

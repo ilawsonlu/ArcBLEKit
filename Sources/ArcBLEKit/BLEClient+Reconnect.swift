@@ -33,6 +33,12 @@ private final class ConnectionAttempt: @unchecked Sendable {
 }
 
 public extension BLEClient {
+    /// Connects to a device previously emitted by this client's scan.
+    /// - Parameters:
+    ///   - device: A device discovered by ``scan(filter:)`` or ``findDevice(matching:timeout:)``.
+    ///   - options: Connection timeout and automatic reconnect policy.
+    /// - Returns: A session for performing GATT operations.
+    /// - Throws: ``BLEError`` if the device is unknown, Bluetooth is unavailable, or the connection fails.
     func connect(
         to device: BLEDevice,
         options: ConnectionOptions = .init()
@@ -44,6 +50,18 @@ public extension BLEClient {
         return try await connect(peripheral: peripheral, device: device, options: options)
     }
 
+    /// Reconnects to a peripheral using a saved CoreBluetooth identifier.
+    ///
+    /// The client first asks CoreBluetooth to retrieve the peripheral. If retrieval does not
+    /// return it, the client can scan with the supplied fallback filter while also requiring the
+    /// saved identifier.
+    ///
+    /// - Parameters:
+    ///   - identifier: A previously saved ``BLEDevice/id``.
+    ///   - fallbackScan: Scan constraints to use when CoreBluetooth cannot retrieve the peripheral.
+    ///   - options: Connection timeout and automatic reconnect policy.
+    /// - Returns: A connected peripheral session.
+    /// - Throws: ``BLEError`` when the peripheral cannot be found or connected.
     func reconnect(
         identifier: UUID,
         fallbackScan: ScanFilter?,

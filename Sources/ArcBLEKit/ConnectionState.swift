@@ -1,3 +1,4 @@
+/// A lifecycle event emitted by a ``PeripheralSession``.
 public enum ConnectionState: Equatable, Sendable {
     case disconnected
     case connecting
