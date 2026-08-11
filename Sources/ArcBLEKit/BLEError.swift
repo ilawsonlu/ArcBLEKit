@@ -5,6 +5,7 @@ import CoreBluetooth
 #endif
 import Foundation
 
+/// Failures reported by ArcBLEKit scanning, connection, and GATT operations.
 public enum BLEError: Error, Equatable, Sendable {
     case bluetoothUnavailable
     case bluetoothUnauthorized

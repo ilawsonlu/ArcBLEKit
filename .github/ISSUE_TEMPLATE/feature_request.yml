@@ -1,0 +1,38 @@
+name: Feature request
+description: Propose an improvement to ArcBLEKit's public API or behavior.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What BLE development problem are you trying to solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API or behavior
+      description: Show an example call site when possible.
+      render: swift
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: How are you solving this today?
+
+  - type: dropdown
+    id: source-compatibility
+    attributes:
+      label: Can this remain source compatible?
+      options:
+        - Yes
+        - No
+        - Unsure
+    validations:
+      required: true

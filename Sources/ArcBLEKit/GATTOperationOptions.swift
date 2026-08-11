@@ -5,6 +5,7 @@ import CoreBluetooth
 #endif
 import Foundation
 
+/// A GATT operation category included in validation and timeout errors.
 public enum GATTOperation: String, Equatable, Sendable {
     case serviceDiscovery
     case characteristicDiscovery
@@ -24,9 +25,12 @@ public enum GATTDiscoveryMode: Equatable, Sendable {
     case all
 }
 
+/// Shared behavior for service discovery and GATT operations.
 public struct GATTOperationOptions: Equatable, Sendable {
+    /// The maximum number of seconds allowed for an operation.
     public var timeout: TimeInterval
 
+    /// Creates GATT operation options.
     public init(timeout: TimeInterval = 10) {
         self.timeout = timeout
     }

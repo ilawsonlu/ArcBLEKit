@@ -5,13 +5,23 @@ import CoreBluetooth
 #endif
 import Foundation
 
+/// Constraints used to select BLE advertisements.
+///
+/// Nonempty and non-`nil` properties are combined with logical AND. Service UUIDs are also passed
+/// to CoreBluetooth to reduce the scan at the system level.
 public struct ScanFilter: Equatable, Sendable {
+    /// Service UUIDs that the peripheral must advertise.
     public var serviceUUIDs: [CBUUID]
+    /// CoreBluetooth peripheral identifiers accepted by the filter.
     public var peripheralIdentifiers: Set<UUID>
+    /// An exact advertised or peripheral name.
     public var name: String?
+    /// A required prefix for the advertised or peripheral name.
     public var namePrefix: String?
+    /// A required prefix for manufacturer-specific advertisement data.
     public var manufacturerDataPrefix: Data?
 
+    /// Creates a scan filter. Empty and `nil` values do not restrict results.
     public init(
         serviceUUIDs: [CBUUID] = [],
         peripheralIdentifiers: Set<UUID> = [],

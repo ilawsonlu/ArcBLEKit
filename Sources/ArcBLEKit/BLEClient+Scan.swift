@@ -52,6 +52,14 @@ private final class FindDeviceAttempt: @unchecked Sendable {
 }
 
 public extension BLEClient {
+    /// Scans for peripherals matching a filter.
+    ///
+    /// Only one scan can be active on a client. Starting another scan finishes the previous
+    /// stream. Cancel the consuming task or stop iterating to stop the CoreBluetooth scan.
+    ///
+    /// - Parameter filter: Service, identifier, name, and manufacturer-data constraints.
+    /// - Returns: A stream of matching advertisement snapshots.
+    /// - Throws: ``BLEError`` when Bluetooth is unavailable while scanning.
     func scan(
         filter: ScanFilter
     ) -> AsyncThrowingStream<BLEDevice, Error> {
@@ -74,6 +82,12 @@ public extension BLEClient {
         }
     }
 
+    /// Returns the first peripheral matching a filter.
+    /// - Parameters:
+    ///   - filter: Constraints applied to advertisements.
+    ///   - timeout: The maximum number of seconds to wait for a match.
+    /// - Returns: The first matching device.
+    /// - Throws: ``BLEError/scanTimedOut``, ``BLEError/operationCancelled``, or a Bluetooth state error.
     func findDevice(
         matching filter: ScanFilter,
         timeout: TimeInterval

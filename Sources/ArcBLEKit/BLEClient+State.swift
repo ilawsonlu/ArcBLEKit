@@ -1,6 +1,9 @@
 import Foundation
 
 public extension BLEClient {
+    /// Suspends until Bluetooth is powered on or a terminal state or timeout is reached.
+    /// - Parameter timeout: The maximum number of seconds to wait.
+    /// - Throws: ``BLEError`` describing authorization, availability, power, timeout, or cancellation.
     func waitUntilReady(timeout: TimeInterval = 10) async throws {
         switch bluetoothState {
         case .poweredOn:

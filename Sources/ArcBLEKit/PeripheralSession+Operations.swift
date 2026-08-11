@@ -6,6 +6,13 @@ import CoreBluetooth
 import Foundation
 
 public extension PeripheralSession {
+    /// Reads a characteristic value.
+    /// - Parameters:
+    ///   - characteristicUUID: The characteristic to read.
+    ///   - serviceUUID: The service containing the characteristic.
+    ///   - options: The discovery and read timeout.
+    /// - Returns: The value returned by the peripheral, or empty data when CoreBluetooth supplies no value.
+    /// - Throws: ``BLEError`` when discovery, validation, timeout, cancellation, or the read fails.
     func read(
         characteristic characteristicUUID: CBUUID,
         service serviceUUID: CBUUID,
@@ -51,6 +58,18 @@ public extension PeripheralSession {
         }
     }
 
+    /// Writes data to a characteristic.
+    ///
+    /// Writes validate the characteristic property and maximum payload length. A write without
+    /// response waits until CoreBluetooth indicates that the peripheral can accept more data.
+    ///
+    /// - Parameters:
+    ///   - data: The payload to write.
+    ///   - characteristicUUID: The destination characteristic.
+    ///   - serviceUUID: The service containing the characteristic.
+    ///   - type: Whether CoreBluetooth should request a response.
+    ///   - options: The discovery, backpressure, and response timeout.
+    /// - Throws: ``BLEError`` when discovery, validation, timeout, cancellation, or the write fails.
     func write(
         _ data: Data,
         to characteristicUUID: CBUUID,
@@ -118,6 +137,20 @@ public extension PeripheralSession {
         }
     }
 
+    /// Subscribes to characteristic value updates.
+    ///
+    /// Multiple streams for the same service and characteristic share the underlying CoreBluetooth
+    /// notification. Active streams are restored after a successful automatic reconnect.
+    ///
+    /// - Parameters:
+    ///   - characteristicUUID: The characteristic that produces updates.
+    ///   - serviceUUID: The service containing the characteristic.
+    ///   - options: The discovery and subscription timeout.
+    ///   - allowUnsupportedProperties: Whether to try subscribing when the characteristic omits
+    ///     the `.notify` and `.indicate` properties.
+    ///   - discoveryMode: Targeted discovery by default, or unfiltered discovery for legacy firmware.
+    /// - Returns: A stream of characteristic values.
+    /// - Throws: ``BLEError`` when discovery, validation, or notification setup fails.
     func notifications(
         for characteristicUUID: CBUUID,
         service serviceUUID: CBUUID,
@@ -185,6 +218,8 @@ public extension PeripheralSession {
         }
     }
 
+    /// Returns the maximum payload length accepted by CoreBluetooth for a write type.
+    /// - Parameter type: The response behavior for the write.
     func maximumWriteValueLength(
         for type: CBCharacteristicWriteType
     ) -> Int {

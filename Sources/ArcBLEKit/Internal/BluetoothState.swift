@@ -4,6 +4,7 @@
 import CoreBluetooth
 #endif
 
+/// The availability and power state of the local Bluetooth controller.
 public enum BluetoothState: Equatable, Sendable {
     case unknown
     case resetting
