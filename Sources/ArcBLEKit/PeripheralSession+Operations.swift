@@ -122,7 +122,8 @@ public extension PeripheralSession {
         for characteristicUUID: CBUUID,
         service serviceUUID: CBUUID,
         options: GATTOperationOptions = .init(),
-        allowUnsupportedProperties: Bool = false
+        allowUnsupportedProperties: Bool = false,
+        discoveryMode: GATTDiscoveryMode = .targeted
     ) async throws -> AsyncThrowingStream<Data, Error> {
         try ensureConnected()
 
@@ -135,7 +136,8 @@ public extension PeripheralSession {
             let characteristic = try await self.resolveCharacteristic(
                 characteristicUUID,
                 service: serviceUUID,
-                options: options
+                options: options,
+                discoveryMode: discoveryMode
             )
 
             if !allowUnsupportedProperties,
@@ -148,12 +150,20 @@ public extension PeripheralSession {
             }
 
             if !self.notificationRegistry.hasSubscribers(for: id) {
-                try await self.setNotifications(
-                    true,
-                    characteristic: characteristic,
-                    id: id,
-                    options: options
-                )
+                do {
+                    try await self.setNotifications(
+                        true,
+                        characteristic: characteristic,
+                        id: id,
+                        options: options
+                    )
+                } catch let error as BLEError {
+                    guard allowUnsupportedProperties,
+                          case .notificationSetupFailed = error
+                    else {
+                        throw error
+                    }
+                }
             }
 
             let subscriberID = UUID()
@@ -269,8 +279,17 @@ extension PeripheralSession {
     private func resolveCharacteristic(
         _ characteristicUUID: CBUUID,
         service serviceUUID: CBUUID,
-        options: GATTOperationOptions
+        options: GATTOperationOptions,
+        discoveryMode: GATTDiscoveryMode = .targeted
     ) async throws -> CharacteristicRepresenting {
+        if discoveryMode == .all {
+            return try await resolveCharacteristicByDiscoveringAll(
+                characteristicUUID,
+                service: serviceUUID,
+                options: options
+            )
+        }
+
         if let cached = characteristicCache.characteristic(
             characteristicUUID,
             service: serviceUUID
@@ -321,6 +340,66 @@ extension PeripheralSession {
                 service: serviceUUID
             )
         }
+        emit(.ready)
+        return characteristic
+    }
+
+    private func resolveCharacteristicByDiscoveringAll(
+        _ characteristicUUID: CBUUID,
+        service serviceUUID: CBUUID,
+        options: GATTOperationOptions
+    ) async throws -> CharacteristicRepresenting {
+        emit(.discoveringServices)
+
+        let serviceEvent = try await operationCoordinator.perform(
+            key: .serviceDiscovery,
+            timeout: options.timeout
+        ) {
+            self.peripheral.discoverServices(nil)
+        }
+
+        guard case let .servicesDiscovered(services, serviceError) = serviceEvent,
+              serviceError == nil,
+              let service = services.first(where: { $0.uuid == serviceUUID })
+        else {
+            throw BLEError.serviceNotFound(serviceUUID)
+        }
+        characteristicCache.store(services: services)
+
+        let characteristicEvent = try await operationCoordinator.perform(
+            key: .characteristicDiscovery(serviceUUID: serviceUUID),
+            timeout: options.timeout
+        ) {
+            self.peripheral.discoverCharacteristics(nil, for: service)
+        }
+
+        guard case let .characteristicsDiscovered(
+            discoveredService,
+            characteristics,
+            characteristicError
+        ) = characteristicEvent,
+        characteristicError == nil,
+        discoveredService.uuid == serviceUUID
+        else {
+            throw BLEError.characteristicNotFound(
+                characteristicUUID,
+                service: serviceUUID
+            )
+        }
+
+        characteristicCache.store(
+            characteristics: characteristics,
+            serviceUUID: serviceUUID
+        )
+        guard let characteristic = characteristics.first(where: {
+            $0.uuid == characteristicUUID
+        }) else {
+            throw BLEError.characteristicNotFound(
+                characteristicUUID,
+                service: serviceUUID
+            )
+        }
+
         emit(.ready)
         return characteristic
     }

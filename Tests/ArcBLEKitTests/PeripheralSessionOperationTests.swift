@@ -285,6 +285,88 @@ final class PeripheralSessionOperationTests: XCTestCase {
         await session.disconnect()
     }
 
+    func testCompatibilityNotificationsReceiveValuesWhenPeripheralRejectsSetup() async throws {
+        let serviceUUID = CBUUID(string: "5A00")
+        let characteristicUUID = CBUUID(string: "5A12")
+        let peripheral = FakePeripheral()
+        let session = makeSession(peripheral: peripheral)
+        let characteristic = FakeCharacteristic(
+            uuid: characteristicUUID,
+            serviceUUID: serviceUUID,
+            properties: [.read, .write]
+        )
+        cache(characteristic, serviceUUID: serviceUUID, in: session)
+
+        let streamTask = Task {
+            try await session.notifications(
+                for: characteristicUUID,
+                service: serviceUUID,
+                allowUnsupportedProperties: true
+            )
+        }
+
+        await waitForNotifyChange(on: peripheral)
+        peripheral.completeNotifySetup(
+            characteristic: characteristic,
+            error: TestFailure()
+        )
+
+        let stream = try await streamTask.value
+        var iterator = stream.makeAsyncIterator()
+        peripheral.emitNotification(
+            characteristic: characteristic,
+            data: Data([0xAA])
+        )
+
+        let value = try await iterator.next()
+        XCTAssertEqual(value, Data([0xAA]))
+        await session.disconnect()
+    }
+
+    func testNotificationsCanDiscoverAllServicesAndCharacteristicsForLegacyDevices() async throws {
+        let serviceUUID = CBUUID(string: "5A00")
+        let characteristicUUID = CBUUID(string: "5A12")
+        let peripheral = FakePeripheral()
+        let session = makeSession(peripheral: peripheral)
+        let service = FakeService(uuid: serviceUUID)
+        let characteristic = FakeCharacteristic(
+            uuid: characteristicUUID,
+            serviceUUID: serviceUUID,
+            properties: [.read]
+        )
+
+        let task = Task {
+            try await session.notifications(
+                for: characteristicUUID,
+                service: serviceUUID,
+                allowUnsupportedProperties: true,
+                discoveryMode: .all
+            )
+        }
+
+        while peripheral.serviceDiscoveryRequests.isEmpty {
+            await Task.yield()
+        }
+        XCTAssertNil(peripheral.serviceDiscoveryRequests.first!)
+        peripheral.completeServiceDiscovery([service])
+
+        while peripheral.characteristicDiscoveryRequests.isEmpty {
+            await Task.yield()
+        }
+        XCTAssertNil(peripheral.characteristicDiscoveryRequests.first?.characteristics)
+        peripheral.completeCharacteristicDiscovery(
+            service: service,
+            characteristics: [characteristic]
+        )
+
+        await waitForNotifyChange(on: peripheral)
+        XCTAssertEqual(peripheral.notifyChanges.first?.enabled, true)
+        peripheral.completeNotifySetup(characteristic: characteristic)
+
+        _ = try await task.value
+        await session.disconnect()
+    }
+
     func testWriteWithoutResponseReturnsWithoutWaitingForWriteCallback() async throws {
         let serviceUUID = CBUUID(string: "FFF0")
         let characteristicUUID = CBUUID(string: "FFF2")
