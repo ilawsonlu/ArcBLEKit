@@ -4,8 +4,8 @@ English | [简体中文](README.zh-CN.md)
 
 [![CI](https://github.com/ilawsonlu/ArcBLEKit/actions/workflows/ci.yml/badge.svg)](https://github.com/ilawsonlu/ArcBLEKit/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/ilawsonlu/ArcBLEKit)](https://github.com/ilawsonlu/ArcBLEKit/releases/latest)
-[![Swift](https://img.shields.io/badge/Swift-5.5%2B-orange.svg)](https://www.swift.org)
-[![Platforms](https://img.shields.io/badge/platforms-iOS%2014%2B%20%7C%20macOS%2011%2B-lightgrey.svg)](Package.swift)
+[![](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Filawsonlu%2FArcBLEKit%2Fbadge%3Ftype%3Dswift-versions)](https://swiftpackageindex.com/ilawsonlu/ArcBLEKit)
+[![](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Filawsonlu%2FArcBLEKit%2Fbadge%3Ftype%3Dplatforms)](https://swiftpackageindex.com/ilawsonlu/ArcBLEKit)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ArcBLEKit is a zero-dependency Swift Package for building Bluetooth Low Energy central apps with Swift Concurrency. It provides cancellable scanning, connection, GATT, and notification APIs with explicit timeouts, automatic reconnect, notification restoration, and CoreBluetooth write-backpressure handling.
