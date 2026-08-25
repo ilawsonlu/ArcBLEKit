@@ -199,6 +199,7 @@ for await state in session.connectionStates {
 ## 文档和示例 App
 
 - [API 文档](https://swiftpackageindex.com/ilawsonlu/ArcBLEKit/documentation)
+- [掘金博客专栏](https://juejin.cn/column/7674961083950858259)
 - [真机示例 App](Examples/ArcBLESampleApp)
 - [更新日志](CHANGELOG.md)
 
