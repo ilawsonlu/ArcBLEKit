@@ -14,7 +14,8 @@ This iOS sample app is a real-device debugging companion for ArcBLEKit. It cover
 ## Requirements
 
 - Xcode 26.4.1 or newer
-- iPhone or iPad running iOS 14.0+
+- iOS 15.0+ deployment target
+- A physical iPhone or iPad supported by the selected Xcode version (Xcode 27 supports running and debugging on iOS 17+)
 - A BLE peripheral advertising a known service UUID
 - Bluetooth permission granted when the app prompts
 

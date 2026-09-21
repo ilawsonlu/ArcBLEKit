@@ -46,6 +46,8 @@ let value = try await session.read(
 - iOS 14.0+ 或 macOS 11.0+
 - Swift Package Manager
 
+Xcode 27 支持的最低部署目标为 iOS 15 和 macOS 12。ArcBLEKit 保留较低的 Package 平台声明，供使用兼容旧版 Xcode 的项目继续使用。
+
 ## 安装
 
 在 Xcode 中选择 **File > Add Package Dependencies**，然后输入：
@@ -60,7 +62,7 @@ https://github.com/ilawsonlu/ArcBLEKit.git
 dependencies: [
     .package(
         url: "https://github.com/ilawsonlu/ArcBLEKit.git",
-        from: "0.2.2"
+        from: "0.2.3"
     )
 ]
 ```
