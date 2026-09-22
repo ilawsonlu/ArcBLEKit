@@ -51,3 +51,36 @@ jobs:
           -destination 'generic/platform=iOS'
           -derivedDataPath .build/docc
           CODE_SIGNING_ALLOWED=NO
+
+  xcode-27-compatibility:
+    name: Xcode 27 compatibility
+    runs-on: xcode-27
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show toolchain versions
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Run package tests
+        run: swift test --parallel
+
+      - name: Build package for iOS
+        run: >-
+          xcodebuild build
+          -scheme ArcBLEKit
+          -destination 'generic/platform=iOS'
+          -configuration Debug
+          CODE_SIGNING_ALLOWED=NO
+
+      - name: Build sample app for iOS Simulator
+        run: >-
+          xcodebuild build
+          -project Examples/ArcBLESampleApp/ArcBLESampleApp.xcodeproj
+          -scheme ArcBLESampleApp
+          -destination 'generic/platform=iOS Simulator'
+          -configuration Debug
+          -derivedDataPath .build/xcode27-sample
+          CODE_SIGNING_ALLOWED=NO

@@ -46,6 +46,8 @@ let value = try await session.read(
 - iOS 14.0+ or macOS 11.0+
 - Swift Package Manager
 
+Xcode 27 supports deployment targets starting with iOS 15 and macOS 12. ArcBLEKit keeps its lower package declarations for consumers that build with compatible earlier Xcode versions.
+
 ## Installation
 
 In Xcode, choose **File > Add Package Dependencies** and enter:
@@ -60,7 +62,7 @@ Or add ArcBLEKit to a package manifest:
 dependencies: [
     .package(
         url: "https://github.com/ilawsonlu/ArcBLEKit.git",
-        from: "0.2.2"
+        from: "0.2.3"
     )
 ]
 ```

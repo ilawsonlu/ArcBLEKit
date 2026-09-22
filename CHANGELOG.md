@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 0.2.3
+
+- Add explicit Xcode 27 compatibility CI and raise the sample app deployment target to iOS 15.
 - Add continuous integration for SwiftPM tests, iOS builds, and DocC documentation.
 - Add hosted DocC configuration, getting-started guides, and contributor templates.
 - Improve README positioning, adoption guidance, and project metadata.
