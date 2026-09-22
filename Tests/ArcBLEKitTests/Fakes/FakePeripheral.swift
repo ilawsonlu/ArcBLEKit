@@ -42,7 +42,18 @@ final class FakePeripheral: PeripheralRepresenting, @unchecked Sendable {
     let identifier: UUID
     let name: String?
 
-    var canSendWriteWithoutResponse = true
+    private var writeWithoutResponseReady = true
+    var onCanSendWriteWithoutResponseRead: ((Bool) -> Void)?
+    var canSendWriteWithoutResponse: Bool {
+        get {
+            let isReady = writeWithoutResponseReady
+            onCanSendWriteWithoutResponseRead?(isReady)
+            return isReady
+        }
+        set {
+            writeWithoutResponseReady = newValue
+        }
+    }
     var maximumWriteLength = 512
     var onEvent: ((PeripheralEvent) -> Void)?
 

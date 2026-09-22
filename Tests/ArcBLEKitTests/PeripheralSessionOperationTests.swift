@@ -420,6 +420,38 @@ final class PeripheralSessionOperationTests: XCTestCase {
         XCTAssertEqual(peripheral.writtenValues.count, 1)
     }
 
+    func testWriteWithoutResponseDoesNotLoseReadySignalBeforeWaiterRegistration() async throws {
+        let serviceUUID = CBUUID(string: "FFF0")
+        let characteristicUUID = CBUUID(string: "FFF2")
+        let peripheral = FakePeripheral()
+        peripheral.canSendWriteWithoutResponse = false
+        let session = makeSession(peripheral: peripheral)
+        let characteristic = FakeCharacteristic(
+            uuid: characteristicUUID,
+            serviceUUID: serviceUUID,
+            properties: [.writeWithoutResponse]
+        )
+        cache(characteristic, serviceUUID: serviceUUID, in: session)
+
+        peripheral.onCanSendWriteWithoutResponseRead = { [weak peripheral] isReady in
+            guard !isReady, let peripheral else {
+                return
+            }
+            peripheral.onCanSendWriteWithoutResponseRead = nil
+            peripheral.becomeReadyToWriteWithoutResponse()
+        }
+
+        try await session.write(
+            Data([0x04]),
+            to: characteristicUUID,
+            service: serviceUUID,
+            type: .withoutResponse,
+            options: GATTOperationOptions(timeout: 0.1)
+        )
+
+        XCTAssertEqual(peripheral.writtenValues.count, 1)
+    }
+
     func testWriteRejectsPayloadLargerThanPeripheralMaximum() async {
         let serviceUUID = CBUUID(string: "FFF0")
         let characteristicUUID = CBUUID(string: "FFF2")

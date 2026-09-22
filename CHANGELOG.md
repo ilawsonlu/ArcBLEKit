@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix a write-without-response readiness race that could time out after CoreBluetooth reported that the peripheral was ready.
+
 ## 0.2.3
 
 - Add explicit Xcode 27 compatibility CI and raise the sample app deployment target to iOS 15.

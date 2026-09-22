@@ -488,10 +488,22 @@ extension PeripheralSession {
             return
         }
 
+        let key = GATTOperationKey.writeWithoutResponseReady
         _ = try await operationCoordinator.perform(
-            key: .writeWithoutResponseReady,
+            key: key,
             timeout: options.timeout
-        ) {}
+        ) {
+            // CoreBluetooth can become ready after the first check but before
+            // the coordinator installs its waiter. Recheck after registration
+            // so a ready callback from that window cannot be lost.
+            guard self.peripheral.canSendWriteWithoutResponse else {
+                return
+            }
+            self.operationCoordinator.resolve(
+                key: key,
+                event: .readyToWriteWithoutResponse
+            )
+        }
     }
 
     private func setNotifications(
