@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add opt-in classic transport bridging to connection options, preserving it across automatic reconnect attempts.
+- Add system-connected peripheral retrieval and iOS system peer connection events, with registration cleanup and Bluetooth power-cycle recovery.
+- Restrict fallback scans to the requested identifier and share the reconnect timeout across scanning and connecting. Optionally recover from a failed retrieved connection by scanning.
+- Preserve the original reconnect method signature for stored function references.
+- Add opt-in foreground saved-device recovery and an audio bridging toggle to the sample app, with request coalescing and manual disconnect suppression.
+- Synchronize test-double state shared by async tests and simulated delegate callbacks.
 - Fix a write-without-response readiness race that could time out after CoreBluetooth reported that the peripheral was ready.
 
 ## 0.2.3

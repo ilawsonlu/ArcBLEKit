@@ -24,6 +24,8 @@ Start with <doc:GettingStarted>, then read <doc:ReliableConnections> before choo
 - ``ScanFilter``
 - ``ConnectionOptions``
 - ``AutoReconnectPolicy``
+- ``ConnectionEventFilter``
+- ``ConnectionEvent``
 
 ### Peripheral communication
 

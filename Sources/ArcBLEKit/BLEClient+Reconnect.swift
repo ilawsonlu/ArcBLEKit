@@ -33,9 +33,9 @@ private final class ConnectionAttempt: @unchecked Sendable {
 }
 
 public extension BLEClient {
-    /// Connects to a device previously emitted by this client's scan.
+    /// Connects to a device obtained from this client's scan, retrieval, or connection events.
     /// - Parameters:
-    ///   - device: A device discovered by ``scan(filter:)`` or ``findDevice(matching:timeout:)``.
+    ///   - device: A device obtained from this client.
     ///   - options: Connection timeout and automatic reconnect policy.
     /// - Returns: A session for performing GATT operations.
     /// - Throws: ``BLEError`` if the device is unknown, Bluetooth is unavailable, or the connection fails.
@@ -50,6 +50,23 @@ public extension BLEClient {
         return try await connect(peripheral: peripheral, device: device, options: options)
     }
 
+    /// Reconnects using a saved identifier, scanning only when CoreBluetooth cannot retrieve it.
+    ///
+    /// This overload preserves the original method signature, including stored function references.
+    /// The timeout is shared by retrieval, scanning, and connection.
+    func reconnect(
+        identifier: UUID,
+        fallbackScan: ScanFilter?,
+        options: ConnectionOptions = .init()
+    ) async throws -> PeripheralSession {
+        try await reconnect(
+            identifier: identifier,
+            fallbackScan: fallbackScan,
+            fallbackOnConnectionFailure: false,
+            options: options
+        )
+    }
+
     /// Reconnects to a peripheral using a saved CoreBluetooth identifier.
     ///
     /// The client first asks CoreBluetooth to retrieve the peripheral. If retrieval does not
@@ -59,46 +76,73 @@ public extension BLEClient {
     /// - Parameters:
     ///   - identifier: A previously saved ``BLEDevice/id``.
     ///   - fallbackScan: Scan constraints to use when CoreBluetooth cannot retrieve the peripheral.
-    ///   - options: Connection timeout and automatic reconnect policy.
+    ///   - fallbackOnConnectionFailure: Also scan after a retrieved peripheral fails to connect.
+    ///     When enabled with a fallback filter, half the remaining budget is reserved for recovery.
+    ///   - options: Total reconnect time budget and subsequent session recovery policy.
     /// - Returns: A connected peripheral session.
     /// - Throws: ``BLEError`` when the peripheral cannot be found or connected.
     func reconnect(
         identifier: UUID,
         fallbackScan: ScanFilter?,
+        fallbackOnConnectionFailure: Bool,
         options: ConnectionOptions = .init()
     ) async throws -> PeripheralSession {
+        try validateBluetoothReady()
+        if Task.isCancelled { throw BLEError.operationCancelled }
+        guard timeoutNanoseconds(options.timeout) != nil else {
+            throw BLEError.connectionTimedOut(identifier)
+        }
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        func remainingBudget() throws -> TimeInterval {
+            if Task.isCancelled { throw BLEError.operationCancelled }
+            let remaining = options.timeout - (ProcessInfo.processInfo.systemUptime - startedAt)
+            guard remaining > 0 else { throw BLEError.connectionTimedOut(identifier) }
+            return remaining
+        }
         let retrieved = central.retrievePeripherals(withIdentifiers: [identifier])
-
         if let peripheral = retrieved.first {
             remember(peripheral)
-            let device = BLEDevice(
-                id: peripheral.identifier,
-                name: peripheral.name,
-                rssi: 0,
-                advertisedServiceUUIDs: [],
-                manufacturerData: nil
-            )
-            return try await connect(peripheral: peripheral, device: device, options: options)
+            let budget = try remainingBudget()
+            do {
+                return try await connect(
+                    peripheral: peripheral,
+                    device: makeRetrievedDevice(peripheral),
+                    options: options,
+                    timeout: fallbackOnConnectionFailure && fallbackScan != nil ? budget / 2 : budget
+                )
+            } catch {
+                guard fallbackOnConnectionFailure, fallbackScan != nil,
+                      let bleError = error as? BLEError else { throw error }
+                switch bleError {
+                case .connectionFailed, .connectionTimedOut: break
+                default: throw error
+                }
+            }
         }
 
-        guard let fallbackScan else {
+        guard let fallbackScan else { throw BLEError.deviceNotFound(identifier) }
+        var filter = fallbackScan
+        filter.peripheralIdentifiers = [identifier]
+        let device = try await findDevice(matching: filter, timeout: remainingBudget())
+        guard let peripheral = rememberedPeripheral(identifier: identifier) else {
             throw BLEError.deviceNotFound(identifier)
         }
-
-        var filter = fallbackScan
-        filter.peripheralIdentifiers.insert(identifier)
-        let device = try await findDevice(matching: filter, timeout: options.timeout)
-        return try await connect(to: device, options: options)
+        return try await connect(
+            peripheral: peripheral, device: device, options: options, timeout: remainingBudget()
+        )
     }
 
     private func connect(
         peripheral: PeripheralRepresenting,
         device: BLEDevice,
-        options: ConnectionOptions
+        options: ConnectionOptions,
+        timeout: TimeInterval? = nil
     ) async throws -> PeripheralSession {
+        var attemptOptions = options
+        attemptOptions.timeout = timeout ?? options.timeout
         let connectedPeripheral = try await establishConnection(
             peripheral: peripheral,
-            timeout: options.timeout
+            options: attemptOptions
         )
         remember(connectedPeripheral)
 
@@ -113,7 +157,7 @@ public extension BLEClient {
                 }
                 return try await self.establishConnection(
                     peripheral: connectedPeripheral,
-                    timeout: options.timeout
+                    options: options
                 )
             },
             onTermination: { [weak self] session in
@@ -126,10 +170,10 @@ public extension BLEClient {
 
     private func establishConnection(
         peripheral: PeripheralRepresenting,
-        timeout: TimeInterval
+        options: ConnectionOptions
     ) async throws -> PeripheralRepresenting {
         try validateBluetoothReady()
-        guard let timeoutNanoseconds = timeoutNanoseconds(timeout) else {
+        guard let timeoutNanoseconds = timeoutNanoseconds(options.timeout) else {
             throw BLEError.connectionTimedOut(peripheral.identifier)
         }
 
@@ -147,7 +191,7 @@ public extension BLEClient {
                     }
                 }
 
-                startConnection(id: connectionID, peripheral: peripheral, onSuperseded: cancelConnection) { connectedPeripheral in
+                startConnection(id: connectionID, peripheral: peripheral, options: options, onSuperseded: cancelConnection) { connectedPeripheral in
                     guard connectedPeripheral.identifier == peripheral.identifier else { return }
                     attempt.finish {
                         guard self.finishConnection(id: connectionID) else {

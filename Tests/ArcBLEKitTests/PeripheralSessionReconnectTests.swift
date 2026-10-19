@@ -61,7 +61,8 @@ final class PeripheralSessionReconnectTests: XCTestCase {
                 to: device,
                 options: ConnectionOptions(
                     timeout: 1,
-                    autoReconnect: .limited(maxAttempts: 1, delay: 0.01)
+                    autoReconnect: .limited(maxAttempts: 1, delay: 0.01),
+                    enableTransportBridging: true
                 )
             )
         }
@@ -87,6 +88,7 @@ final class PeripheralSessionReconnectTests: XCTestCase {
             2
         )
 
+        XCTAssertEqual(central.connectionOptions.map(\.enableTransportBridging), [true, true])
         let connecting = await iterator.next()
         central.completeConnection(peripheral)
         let reconnected = await iterator.next()

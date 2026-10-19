@@ -5,13 +5,13 @@ import CoreBluetooth
 #endif
 import Foundation
 
-/// An immutable snapshot of a discovered BLE peripheral and its advertisement data.
+/// An immutable peripheral snapshot. Retrieved devices and system events may lack advertisement data.
 public struct BLEDevice: Identifiable, Equatable, Sendable {
     /// The identifier CoreBluetooth assigns to the peripheral in the current app and device context.
     public let id: UUID
     /// The advertised local name, falling back to the CoreBluetooth peripheral name when available.
     public let name: String?
-    /// The received signal strength from the latest advertisement.
+    /// The received signal strength from the latest advertisement; zero when unknown.
     public let rssi: Int
     /// Service UUIDs included in the advertisement.
     public let advertisedServiceUUIDs: [CBUUID]

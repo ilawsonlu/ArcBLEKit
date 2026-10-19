@@ -7,21 +7,28 @@ import Foundation
 @testable import ArcBLEKit
 
 final class FakeCentralManager: CentralManaging, @unchecked Sendable {
-    var state: BluetoothState
-    var onStateChange: ((BluetoothState) -> Void)?
-    var onDiscover: ((PeripheralRepresenting, BLEAdvertisement, Int) -> Void)?
-    var onConnect: ((PeripheralRepresenting) -> Void)?
-    var onFailToConnect: ((PeripheralRepresenting, Error?) -> Void)?
-    var onDisconnect: ((PeripheralRepresenting, Error?) -> Void)?
+    @TestLocked var state: BluetoothState
+    @TestLocked var onStateChange: ((BluetoothState) -> Void)?
+    @TestLocked var onDiscover: ((PeripheralRepresenting, BLEAdvertisement, Int) -> Void)?
+    @TestLocked var onConnect: ((PeripheralRepresenting) -> Void)?
+    @TestLocked var onFailToConnect: ((PeripheralRepresenting, Error?) -> Void)?
+    @TestLocked var onConnectionEvent: ((ConnectionEvent.Kind, PeripheralRepresenting) -> Void)?
+    @TestLocked private(set) var registeredEventFilter: ConnectionEventFilter?
+    @TestLocked private(set) var connectionEventRegistrationCount = 0
+    @TestLocked var onRegisterConnectionEvents: ((ConnectionEventFilter?) -> Void)?
+    @TestLocked var onDisconnect: ((PeripheralRepresenting, Error?) -> Void)?
 
-    private(set) var scannedServiceUUIDs: [CBUUID]?
-    private(set) var scanForPeripheralsCallCount = 0
-    private(set) var didStopScan = false
-    private(set) var stopScanCallCount = 0
-    private(set) var retrievedIdentifiers: [UUID] = []
-    private(set) var connectedIdentifiers: [UUID] = []
-    private(set) var cancelledIdentifiers: [UUID] = []
-    var retrievedPeripherals: [PeripheralRepresenting] = []
+    @TestLocked private(set) var scannedServiceUUIDs: [CBUUID]?
+    @TestLocked private(set) var scanForPeripheralsCallCount = 0
+    @TestLocked private(set) var didStopScan = false
+    @TestLocked private(set) var stopScanCallCount = 0
+    @TestLocked private(set) var retrievedIdentifiers: [UUID] = []
+    @TestLocked private(set) var connectedIdentifiers: [UUID] = []
+    @TestLocked private(set) var cancelledIdentifiers: [UUID] = []
+    @TestLocked private(set) var connectionOptions: [ConnectionOptions] = []
+    @TestLocked private(set) var connectedServiceQueries: [[CBUUID]] = []
+    @TestLocked var systemConnectedPeripherals: [PeripheralRepresenting] = []
+    @TestLocked var retrievedPeripherals: [PeripheralRepresenting] = []
 
     init(state: BluetoothState = .poweredOn) {
         self.state = state
@@ -31,6 +38,12 @@ final class FakeCentralManager: CentralManaging, @unchecked Sendable {
         scanForPeripheralsCallCount += 1
         scannedServiceUUIDs = services
         didStopScan = false
+    }
+
+    func registerForConnectionEvents(matching filter: ConnectionEventFilter?) {
+        registeredEventFilter = filter
+        connectionEventRegistrationCount += 1
+        onRegisterConnectionEvents?(filter)
     }
 
     func stopScan() {
@@ -43,7 +56,13 @@ final class FakeCentralManager: CentralManaging, @unchecked Sendable {
         return retrievedPeripherals.filter { identifiers.contains($0.identifier) }
     }
 
-    func connect(_ peripheral: PeripheralRepresenting) {
+    func retrieveConnectedPeripherals(withServices services: [CBUUID]) -> [PeripheralRepresenting] {
+        connectedServiceQueries.append(services)
+        return systemConnectedPeripherals
+    }
+
+    func connect(_ peripheral: PeripheralRepresenting, options: ConnectionOptions) {
+        connectionOptions.append(options)
         connectedIdentifiers.append(peripheral.identifier)
     }
 

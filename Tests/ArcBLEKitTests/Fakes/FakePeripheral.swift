@@ -18,7 +18,7 @@ final class FakeCharacteristic: CharacteristicRepresenting, @unchecked Sendable 
     let uuid: CBUUID
     let serviceUUID: CBUUID
     let properties: CBCharacteristicProperties
-    var isNotifying: Bool
+    @TestLocked var isNotifying: Bool
 
     init(
         uuid: CBUUID,
@@ -42,8 +42,8 @@ final class FakePeripheral: PeripheralRepresenting, @unchecked Sendable {
     let identifier: UUID
     let name: String?
 
-    private var writeWithoutResponseReady = true
-    var onCanSendWriteWithoutResponseRead: ((Bool) -> Void)?
+    @TestLocked private var writeWithoutResponseReady = true
+    @TestLocked var onCanSendWriteWithoutResponseRead: ((Bool) -> Void)?
     var canSendWriteWithoutResponse: Bool {
         get {
             let isReady = writeWithoutResponseReady
@@ -54,19 +54,19 @@ final class FakePeripheral: PeripheralRepresenting, @unchecked Sendable {
             writeWithoutResponseReady = newValue
         }
     }
-    var maximumWriteLength = 512
-    var onEvent: ((PeripheralEvent) -> Void)?
+    @TestLocked var maximumWriteLength = 512
+    @TestLocked var onEvent: ((PeripheralEvent) -> Void)?
 
-    private(set) var discoveredServiceUUIDs: [CBUUID]?
-    private(set) var discoveredCharacteristicUUIDs: [CBUUID]?
-    private(set) var discoveredCharacteristicsForServiceUUID: CBUUID?
-    private(set) var serviceDiscoveryRequests: [[CBUUID]?] = []
-    private(set) var characteristicDiscoveryRequests: [
+    @TestLocked private(set) var discoveredServiceUUIDs: [CBUUID]?
+    @TestLocked private(set) var discoveredCharacteristicUUIDs: [CBUUID]?
+    @TestLocked private(set) var discoveredCharacteristicsForServiceUUID: CBUUID?
+    @TestLocked private(set) var serviceDiscoveryRequests: [[CBUUID]?] = []
+    @TestLocked private(set) var characteristicDiscoveryRequests: [
         (characteristics: [CBUUID]?, service: CBUUID)
     ] = []
-    private(set) var readCharacteristics: [CBUUID] = []
-    private(set) var writtenValues: [(data: Data, characteristic: CBUUID, type: CBCharacteristicWriteType)] = []
-    private(set) var notifyChanges: [(enabled: Bool, characteristic: CBUUID)] = []
+    @TestLocked private(set) var readCharacteristics: [CBUUID] = []
+    @TestLocked private(set) var writtenValues: [(data: Data, characteristic: CBUUID, type: CBCharacteristicWriteType)] = []
+    @TestLocked private(set) var notifyChanges: [(enabled: Bool, characteristic: CBUUID)] = []
 
     init(identifier: UUID = UUID(), name: String? = nil) {
         self.identifier = identifier

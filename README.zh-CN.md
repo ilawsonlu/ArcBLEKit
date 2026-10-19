@@ -131,6 +131,42 @@ let session = try await client.reconnect(
 
 该标识符由 CoreBluetooth 针对当前 App 和 Apple 设备环境分配，并不是全局 BLE MAC 地址。
 
+## 复用系统连接与双模音箱
+
+蓝牙就绪后，可先查询系统已连接且提供指定 GATT 服务的外设，按保存的 identifier 选择设备，再调用 `connect` 建立本 App 的会话：
+
+```swift
+let connected = try client.retrieveConnectedDevices(withServices: [serviceUUID])
+if let device = connected.first(where: { $0.id == savedID }) {
+    let session = try await client.connect(to: device)
+    // 使用 session 读写 GATT。
+}
+```
+
+返回结果不代表音频已就绪；RSSI 未知时为 0，广播字段为空。空服务列表返回空结果。
+
+在支持 CTKD 的双模设备上，连接时可设置 `ConnectionOptions(enableTransportBridging: true)`，请求系统拉起传统蓝牙配置。默认关闭；macOS 忽略该选项。配对授权和音频状态仍由系统及 App 管理。
+
+在 iOS 上可监听后续系统连接事件，无需持续扫描：
+
+```swift
+#if os(iOS)
+for try await event in client.connectionEvents(
+    matching: ConnectionEventFilter(serviceUUIDs: [serviceUUID])
+) {
+    if event.kind == .connected, event.device.id == savedID {
+        // 交给 App 的统一连接任务处理，避免与启动恢复或用户点击重复连接。
+    }
+}
+#endif
+```
+
+服务与设备 identifier 按 OR 匹配；空过滤器直接结束。每个 client 只有一个事件流，新订阅结束旧订阅，取消消费任务清除注册；蓝牙再次开启后重新注册。事件仅反映系统 peer 状态，不能直接当成 GATT 会话或音频已就绪。macOS 不提供该事件 API。
+
+`reconnect` 的 `options.timeout` 为整次恢复的共享预算。设置 `fallbackOnConnectionFailure: true` 且提供 `fallbackScan` 时，会为扫描恢复预留一半预算；仅连接失败或超时触发回退，取消和权限错误不会触发。回退扫描只接受目标 identifier。成功后的会话仍保留完整超时和重连策略。
+
+设备记录、自动连接偏好、主动断开后的暂停策略由 App 保存和调度。此能力不包含完整后台状态恢复。
+
 ## 读取和写入
 
 ```swift
@@ -205,7 +241,7 @@ for await state in session.connectionStates {
 - [真机示例 App](Examples/ArcBLESampleApp)
 - [更新日志](CHANGELOG.md)
 
-示例 App 展示了扫描、持久化外设标识符、连接和重连流程、可配置 GATT 操作、通知，以及在实体 iPhone 或 iPad 上记录连接状态。
+示例 App 展示了扫描、保存外设标识符及服务、可选的前台自动恢复、复用系统连接、音频桥接开关、可配置 GATT 操作、通知，以及在实体 iPhone 或 iPad 上记录连接状态。用户主动断开后会暂停前台自动连接，直到用户明确恢复。
 
 ## 状态恢复
 

@@ -119,7 +119,7 @@ final class BLEClientReconnectTests: XCTestCase {
         let task = Task {
             try await client.reconnect(
                 identifier: id,
-                fallbackScan: ScanFilter(serviceUUIDs: [service]),
+                fallbackScan: ScanFilter(serviceUUIDs: [service], peripheralIdentifiers: [otherPeripheral.identifier]),
                 options: ConnectionOptions(timeout: 1)
             )
         }
@@ -303,6 +303,73 @@ final class BLEClientReconnectTests: XCTestCase {
         XCTAssertEqual(session.device.id, secondID)
         XCTAssertNil(central.onConnect)
         XCTAssertNil(central.onFailToConnect)
+    }
+
+    func testRetrievedConnectionFailureCanFallBackWithoutLosingBridgeOption() async throws {
+        let central = FakeCentralManager()
+        let peripheral = FakePeripheral()
+        central.retrievedPeripherals = [peripheral]
+        let client = BLEClient(central: central)
+        let task = Task {
+            try await client.reconnect(
+                identifier: peripheral.identifier,
+                fallbackScan: ScanFilter(),
+                fallbackOnConnectionFailure: true,
+                options: .init(timeout: 1, enableTransportBridging: true)
+            )
+        }
+        await waitForConnectAttempt(on: central)
+        XCTAssertLessThanOrEqual(central.connectionOptions[0].timeout, 0.5)
+        central.failConnection(peripheral)
+        await waitForScanStart(on: central)
+        central.discover(peripheral, advertisement: .init(localName: nil, serviceUUIDs: [], manufacturerData: nil), rssi: -40)
+        await waitForConnectAttempt(on: central, count: 2)
+        central.completeConnection(peripheral)
+        let session = try await task.value
+        XCTAssertEqual(central.connectionOptions.map(\.enableTransportBridging), [true, true])
+        XCTAssertEqual(session.options.timeout, 1)
+        await session.disconnect()
+    }
+
+    func testCancellingRetrievedConnectionDoesNotStartFallbackScan() async {
+        let central = FakeCentralManager()
+        let peripheral = FakePeripheral()
+        central.retrievedPeripherals = [peripheral]
+        let client = BLEClient(central: central)
+        let task = Task {
+            try await client.reconnect(
+                identifier: peripheral.identifier,
+                fallbackScan: ScanFilter(),
+                fallbackOnConnectionFailure: true
+            )
+        }
+        await waitForConnectAttempt(on: central)
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation")
+        } catch {
+            XCTAssertEqual(error as? BLEError, .operationCancelled)
+        }
+        XCTAssertEqual(central.scanForPeripheralsCallCount, 0)
+    }
+
+    func testScanAndConnectShareReconnectTimeBudget() async throws {
+        let central = FakeCentralManager()
+        let peripheral = FakePeripheral()
+        let client = BLEClient(central: central)
+        let task = Task {
+            try await client.reconnect(identifier: peripheral.identifier, fallbackScan: ScanFilter(), options: .init(timeout: 1))
+        }
+        await waitForScanStart(on: central)
+        try await Task.sleep(nanoseconds: 30_000_000)
+        central.discover(peripheral, advertisement: .init(localName: nil, serviceUUIDs: [], manufacturerData: nil), rssi: -40)
+        await waitForConnectAttempt(on: central)
+        XCTAssertLessThan(central.connectionOptions[0].timeout, 0.98)
+        central.completeConnection(peripheral)
+        let session = try await task.value
+        XCTAssertEqual(session.options.timeout, 1)
+        await session.disconnect()
     }
 
     private func waitForScanStart(on central: FakeCentralManager) async {

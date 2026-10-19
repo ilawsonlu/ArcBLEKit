@@ -4,7 +4,7 @@ import Foundation
 ///
 /// A session serializes GATT operations, publishes connection lifecycle events, and owns active
 /// notification subscriptions. Obtain sessions from ``BLEClient/connect(to:options:)`` or
-/// ``BLEClient/reconnect(identifier:fallbackScan:options:)``.
+/// ``BLEClient/reconnect(identifier:fallbackScan:fallbackOnConnectionFailure:options:)``.
 public final class PeripheralSession: @unchecked Sendable {
     typealias ReconnectAction = () async throws -> PeripheralRepresenting
     typealias TerminationHandler = (PeripheralSession) -> Void
