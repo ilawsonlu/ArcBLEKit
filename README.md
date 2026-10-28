@@ -210,6 +210,15 @@ let updates = try await session.notifications(
 
 Keep the strict defaults for compliant peripherals.
 
+Each consumer's compatibility and discovery settings are preserved across automatic reconnects;
+the original streams continue receiving values. Shared restoration tolerates notification setup
+rejection only when every active consumer sets `allowUnsupportedProperties: true`, and uses `.all`
+discovery when any active consumer requests it. A strict consumer joining a channel whose setup
+was tolerated must pass property validation and receive successful setup confirmation first.
+Cancelling a consumer removes its settings; only the last consumer disables the notification.
+Cancellation, disconnection, discovery errors, and timeouts are never ignored by compatibility mode.
+Initial setup uses that call's operation timeout; restoration uses the session's connection timeout.
+
 ## Bluetooth and Connection States
 
 ```swift

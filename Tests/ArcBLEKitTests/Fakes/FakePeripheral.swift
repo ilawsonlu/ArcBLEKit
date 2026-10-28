@@ -67,6 +67,7 @@ final class FakePeripheral: PeripheralRepresenting, @unchecked Sendable {
     @TestLocked private(set) var readCharacteristics: [CBUUID] = []
     @TestLocked private(set) var writtenValues: [(data: Data, characteristic: CBUUID, type: CBCharacteristicWriteType)] = []
     @TestLocked private(set) var notifyChanges: [(enabled: Bool, characteristic: CBUUID)] = []
+    @TestLocked private(set) var notifyCharacteristics: [CharacteristicRepresenting] = []
 
     init(identifier: UUID = UUID(), name: String? = nil) {
         self.identifier = identifier
@@ -95,6 +96,7 @@ final class FakePeripheral: PeripheralRepresenting, @unchecked Sendable {
     }
 
     func setNotifyValue(_ enabled: Bool, for characteristic: CharacteristicRepresenting) {
+        notifyCharacteristics.append(characteristic)
         notifyChanges.append((enabled, characteristic.uuid))
     }
 

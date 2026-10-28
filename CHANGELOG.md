@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve each notification consumer's compatibility and discovery configuration during automatic reconnect, restoring the original streams without a new session.
+- Enforce strict shared-consumer validation and merge restoration settings across active consumers; recompute them when consumers cancel.
+- Reject stale notification restoration snapshots and prevent cancelled subscriptions from being recreated or updated by an earlier restoration.
 - Add opt-in classic transport bridging to connection options, preserving it across automatic reconnect attempts.
 - Add system-connected peripheral retrieval and iOS system peer connection events, with registration cleanup and Bluetooth power-cycle recovery.
 - Restrict fallback scans to the requested identifier and share the reconnect timeout across scanning and connecting. Optionally recover from a failed retrieved connection by scanning.

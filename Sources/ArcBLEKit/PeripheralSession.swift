@@ -89,6 +89,7 @@ public final class PeripheralSession: @unchecked Sendable {
         let alreadyReconnecting = reconnectInProgress
         lifecycleLock.unlock()
 
+        notificationRegistry.invalidateSetups()
         operationCoordinator.failAll(with: disconnectError)
         Task {
             await operationQueue.cancelAll(with: disconnectError)

@@ -69,3 +69,17 @@ let updates = try await session.notifications(
 ```
 
 Apply compatibility settings only to affected peripherals because they relax validation or perform more discovery work.
+
+The session saves each consumer's compatibility and discovery settings and restores the original
+streams after reconnecting. For consumers sharing a service and characteristic:
+
+- Setup rejection is tolerated only when every active consumer enables `allowUnsupportedProperties`.
+- Discovery uses `.all` when any active consumer requests it, otherwise `.targeted`.
+- A strict consumer joining a channel with tolerated setup failure must pass property validation
+  and successfully enable notifications before joining. Failure leaves existing consumers intact.
+- Cancelling a consumer removes its settings. Only the last consumer disables the underlying
+  subscription. Restoration checks the subscription generation before enabling or updating it.
+
+Compatibility does not ignore cancellation, disconnection, discovery errors, or timeouts. Initial
+setup uses that invocation's ``GATTOperationOptions``; restoration uses the session's
+``ConnectionOptions/timeout``. A restoration failure still ends the session and its active streams.
