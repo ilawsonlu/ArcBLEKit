@@ -62,7 +62,7 @@ https://github.com/ilawsonlu/ArcBLEKit.git
 dependencies: [
     .package(
         url: "https://github.com/ilawsonlu/ArcBLEKit.git",
-        from: "0.2.3"
+        from: "0.2.5"
     )
 ]
 ```

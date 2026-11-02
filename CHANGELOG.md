@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.5
+
 - Preserve each notification consumer's compatibility and discovery configuration during automatic reconnect, restoring the original streams without a new session.
 - Enforce strict shared-consumer validation and merge restoration settings across active consumers; recompute them when consumers cancel.
 - Reject stale notification restoration snapshots and prevent cancelled subscriptions from being recreated or updated by an earlier restoration.
@@ -11,6 +13,9 @@
 - Preserve the original reconnect method signature for stored function references.
 - Add opt-in foreground saved-device recovery and an audio bridging toggle to the sample app, with request coalescing and manual disconnect suppression.
 - Synchronize test-double state shared by async tests and simulated delegate callbacks.
+
+## 0.2.4
+
 - Fix a write-without-response readiness race that could time out after CoreBluetooth reported that the peripheral was ready.
 
 ## 0.2.3

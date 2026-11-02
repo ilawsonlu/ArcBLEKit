@@ -62,7 +62,7 @@ Or add ArcBLEKit to a package manifest:
 dependencies: [
     .package(
         url: "https://github.com/ilawsonlu/ArcBLEKit.git",
-        from: "0.2.3"
+        from: "0.2.5"
     )
 ]
 ```
