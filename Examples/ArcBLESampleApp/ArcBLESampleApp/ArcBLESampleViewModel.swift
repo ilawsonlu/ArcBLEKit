@@ -4,6 +4,7 @@
 import CoreBluetooth
 #endif
 import ArcBLEKit
+import Combine
 import Foundation
 
 @MainActor
@@ -14,6 +15,16 @@ final class ArcBLESampleViewModel: ObservableObject {
     @Published var notifyCharacteristicUUIDText = "FFF3"
     @Published var writePayloadHex = "01 02"
     @Published var writeWithResponse = true
+    @Published var enableTransportBridging = false {
+        didSet { defaults.set(enableTransportBridging, forKey: Self.bridgingKey) }
+    }
+    @Published var autoConnectSavedDevice = false {
+        didSet {
+            defaults.set(autoConnectSavedDevice, forKey: Self.autoConnectKey)
+            if autoConnectSavedDevice { automaticConnectionSuppressed = false }
+        }
+    }
+    @Published private(set) var isConnecting = false
     @Published private(set) var devices: [BLEDevice] = []
     @Published private(set) var isScanning = false
     @Published private(set) var isSubscribed = false
@@ -24,18 +35,41 @@ final class ArcBLESampleViewModel: ObservableObject {
     @Published private(set) var latestNotificationText = "None"
     @Published private(set) var logs: [String] = ["Ready"]
 
-    private let client = BLEClient()
+    private let client: BLEClient
+    private let defaults: UserDefaults
+    private static let autoConnectKey = "ArcBLESample.autoConnectSavedDevice"
+    private static let bridgingKey = "ArcBLESample.enableTransportBridging"
+    private static let savedServiceKey = "ArcBLESample.savedServiceUUID"
+    private var connectionTask: Task<Void, Never>?
+    private var connectionCleanupTask: Task<Void, Never>?
+    private var connectionAttemptID: UUID?
+    private var connectionIsAutomatic = false
+    private var automaticConnectionSuppressed = false
+    private var automaticRunID: UUID?
+    private var connectionEventsTask: Task<Void, Never>?
+    private var connectionEventsTaskID: UUID?
     private var scanTask: Task<Void, Never>?
     private var stateTask: Task<Void, Never>?
     private var notificationTask: Task<Void, Never>?
     private var session: PeripheralSession?
     private let savedIdentifierKey = "ArcBLESample.savedPeripheralIdentifier"
 
-    init() {
+    init(client: BLEClient = BLEClient(), defaults: UserDefaults = .standard) {
+        self.client = client
+        self.defaults = defaults
+        autoConnectSavedDevice = defaults.bool(forKey: Self.autoConnectKey)
+        enableTransportBridging = defaults.bool(forKey: Self.bridgingKey)
+        if let service = defaults.string(forKey: Self.savedServiceKey) {
+            serviceUUIDText = service
+        }
         loadSavedIdentifier()
     }
 
+    var canDisconnect: Bool { session != nil || isConnecting }
+
     deinit {
+        connectionTask?.cancel()
+        connectionEventsTask?.cancel()
         scanTask?.cancel()
         stateTask?.cancel()
         notificationTask?.cancel()
@@ -43,6 +77,8 @@ final class ArcBLESampleViewModel: ObservableObject {
 
     func startScan() {
         guard scanTask == nil else { return }
+        automaticConnectionSuppressed = true
+        cancelPendingConnection(onlyAutomatic: true)
         guard let serviceUUID = makeServiceUUID() else {
             appendLog("Invalid service UUID: \(serviceUUIDText)")
             return
@@ -81,60 +117,185 @@ final class ArcBLESampleViewModel: ObservableObject {
     }
 
     func connect(to device: BLEDevice) {
-        stopScan()
-        statusText = "Connecting"
-        appendLog("Connecting to \(device.displayName)")
-
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let session = try await client.connect(
-                    to: device,
-                    options: sampleConnectionOptions
-                )
-                self.handleConnectedSession(session)
-            } catch {
-                self.handleError(error, prefix: "Connect failed")
-            }
+        automaticConnectionSuppressed = false
+        let client = client
+        let options = sampleConnectionOptions
+        beginConnection(automatic: false, message: "Connecting to \(device.displayName)") {
+            try await client.waitUntilReady(timeout: 10)
+            return try await client.connect(to: device, options: options)
         }
     }
 
     func reconnectSavedDevice() {
-        guard let savedIdentifier = savedIdentifier() else {
-            appendLog("No saved peripheral identifier")
-            return
-        }
-        guard let serviceUUID = makeServiceUUID() else {
-            appendLog("Invalid service UUID: \(serviceUUIDText)")
-            return
-        }
+        automaticConnectionSuppressed = false
+        reconnectSavedDevice(automatic: false)
+    }
 
+    private func reconnectSavedDevice(automatic: Bool) {
+        if automatic {
+            guard autoConnectSavedDevice, !automaticConnectionSuppressed, session == nil else { return }
+        }
+        guard let identifier = savedIdentifier(), let serviceUUID = makeServiceUUID() else {
+            if !automatic { appendLog("A saved identifier and valid service UUID are required") }
+            return
+        }
+        let client = client
+        let options = sampleConnectionOptions
+        beginConnection(automatic: automatic, message: "Restoring \(identifier.uuidString)") {
+            try await client.waitUntilReady(timeout: 10)
+            if let device = try client.retrieveConnectedDevices(withServices: [serviceUUID])
+                .first(where: { $0.id == identifier }) {
+                return try await client.connect(to: device, options: options)
+            }
+            return try await client.reconnect(
+                identifier: identifier,
+                fallbackScan: ScanFilter(serviceUUIDs: [serviceUUID]),
+                fallbackOnConnectionFailure: true,
+                options: options
+            )
+        }
+    }
+
+    private func beginConnection(
+        automatic: Bool,
+        message: String,
+        operation: @escaping () async throws -> PeripheralSession
+    ) {
+        guard connectionTask == nil else {
+            appendLog("A connection request is already in progress")
+            return
+        }
         stopScan()
-        statusText = "Reconnecting"
-        appendLog("Reconnecting to \(savedIdentifier.uuidString)")
-
-        Task { [weak self] in
-            guard let self else { return }
+        stopNotifications()
+        stateTask?.cancel()
+        stateTask = nil
+        let previousSession = session
+        let previousCleanup = connectionCleanupTask
+        session = nil
+        connectedDeviceID = nil
+        let attemptID = UUID()
+        let serviceText = serviceUUIDText
+        connectionAttemptID = attemptID
+        connectionIsAutomatic = automatic
+        isConnecting = true
+        statusText = automatic ? "Restoring saved device" : "Connecting"
+        appendLog(message)
+        connectionTask = Task { [weak self] in
+            await previousCleanup?.value
+            await previousSession?.disconnect()
+            guard !Task.isCancelled else { return }
             do {
-                let session = try await client.reconnect(
-                    identifier: savedIdentifier,
-                    fallbackScan: ScanFilter(serviceUUIDs: [serviceUUID]),
-                    options: sampleConnectionOptions
-                )
-                self.handleConnectedSession(session)
+                let newSession = try await operation()
+                guard let self, self.connectionAttemptID == attemptID, !Task.isCancelled else {
+                    await newSession.disconnect()
+                    return
+                }
+                self.connectionTask = nil
+                self.connectionAttemptID = nil
+                self.isConnecting = false
+                self.defaults.set(serviceText, forKey: Self.savedServiceKey)
+                self.handleConnectedSession(newSession)
             } catch {
-                self.handleError(error, prefix: "Reconnect failed")
+                guard let self, self.connectionAttemptID == attemptID else { return }
+                self.connectionTask = nil
+                self.connectionAttemptID = nil
+                self.isConnecting = false
+                if Task.isCancelled || error as? BLEError == .operationCancelled {
+                    self.statusText = "Disconnected"
+                } else {
+                    self.handleError(error, prefix: "Connection failed")
+                }
             }
         }
     }
 
+    private func cancelPendingConnection(onlyAutomatic: Bool = false) {
+        guard connectionTask != nil, !onlyAutomatic || connectionIsAutomatic else { return }
+        connectionAttemptID = nil
+        connectionTask?.cancel()
+        connectionCleanupTask = connectionTask
+        connectionTask = nil
+        isConnecting = false
+        statusText = "Disconnected"
+    }
+
     func disconnect() {
-        guard let session else { return }
-        stopNotifications()
-        Task { [weak self] in
-            await session.disconnect()
-            self?.handleDisconnected()
+        automaticConnectionSuppressed = true
+        cancelPendingConnection()
+        stateTask?.cancel()
+        stateTask = nil
+        let previousSession = session
+        let previousCleanup = connectionCleanupTask
+        handleDisconnected()
+        connectionCleanupTask = Task {
+            await previousCleanup?.value
+            await previousSession?.disconnect()
         }
+    }
+
+    /// Scoped to the foreground SwiftUI task; preferences never force a background reconnect.
+    func runAutomaticConnection(isForeground: Bool) async {
+        guard isForeground, autoConnectSavedDevice, let identifier = savedIdentifier() else { return }
+        let runID = UUID()
+        automaticRunID = runID
+        defer {
+            if automaticRunID == runID {
+                automaticRunID = nil
+                connectionEventsTaskID = nil
+                connectionEventsTask?.cancel()
+                connectionEventsTask = nil
+                cancelPendingConnection(onlyAutomatic: true)
+            }
+        }
+        for await state in client.bluetoothStates {
+            guard !Task.isCancelled, automaticRunID == runID else { return }
+            if state == .poweredOn {
+                guard !automaticConnectionSuppressed else {
+                    appendLog("Automatic connection paused after user action")
+                    continue
+                }
+                observeSystemConnections(identifier: identifier, runID: runID)
+                reconnectSavedDevice(automatic: true)
+            } else {
+                connectionEventsTaskID = nil
+                connectionEventsTask?.cancel()
+                connectionEventsTask = nil
+                cancelPendingConnection(onlyAutomatic: true)
+                appendLog("Automatic connection waiting for Bluetooth: \(state)")
+            }
+        }
+    }
+
+    private func observeSystemConnections(identifier: UUID, runID: UUID) {
+        guard connectionEventsTask == nil else { return }
+        #if os(iOS)
+        let client = client
+        let taskID = UUID()
+        connectionEventsTaskID = taskID
+        connectionEventsTask = Task { [weak self] in
+            defer {
+                if self?.connectionEventsTaskID == taskID {
+                    self?.connectionEventsTaskID = nil
+                    self?.connectionEventsTask = nil
+                }
+            }
+            do {
+                for try await event in client.connectionEvents(
+                    matching: ConnectionEventFilter(peripheralIdentifiers: [identifier])
+                ) {
+                    guard !Task.isCancelled, let self, self.automaticRunID == runID else { return }
+                    self.appendLog("System peer: \(event.kind), \(event.device.id)")
+                    if event.kind == .connected, event.device.id == self.savedIdentifier() {
+                        self.reconnectSavedDevice(automatic: true)
+                    }
+                }
+            } catch {
+                if !Task.isCancelled, self?.automaticRunID == runID {
+                    self?.appendLog("System event observation failed: \(error)")
+                }
+            }
+        }
+        #endif
     }
 
     func readValue() {
@@ -248,7 +409,10 @@ final class ArcBLESampleViewModel: ObservableObject {
     }
 
     func clearSavedIdentifier() {
-        UserDefaults.standard.removeObject(forKey: savedIdentifierKey)
+        automaticConnectionSuppressed = true
+        cancelPendingConnection()
+        defaults.removeObject(forKey: savedIdentifierKey)
+        defaults.removeObject(forKey: Self.savedServiceKey)
         loadSavedIdentifier()
         appendLog("Cleared saved identifier")
     }
@@ -298,7 +462,8 @@ final class ArcBLESampleViewModel: ObservableObject {
         stateTask?.cancel()
         stateTask = Task { [weak self] in
             for await state in session.connectionStates {
-                self?.handleConnectionState(state)
+                guard !Task.isCancelled, let self, self.session === session else { return }
+                self.handleConnectionState(state)
             }
         }
     }
@@ -329,12 +494,12 @@ final class ArcBLESampleViewModel: ObservableObject {
     }
 
     private func saveIdentifier(_ identifier: UUID) {
-        UserDefaults.standard.set(identifier.uuidString, forKey: savedIdentifierKey)
+        defaults.set(identifier.uuidString, forKey: savedIdentifierKey)
         loadSavedIdentifier()
     }
 
     private func savedIdentifier() -> UUID? {
-        guard let rawValue = UserDefaults.standard.string(forKey: savedIdentifierKey) else {
+        guard let rawValue = defaults.string(forKey: savedIdentifierKey) else {
             return nil
         }
         return UUID(uuidString: rawValue)
@@ -347,7 +512,8 @@ final class ArcBLESampleViewModel: ObservableObject {
     private var sampleConnectionOptions: ConnectionOptions {
         ConnectionOptions(
             timeout: 10,
-            autoReconnect: .limited(maxAttempts: 3, delay: 1)
+            autoReconnect: .limited(maxAttempts: 3, delay: 1),
+            enableTransportBridging: enableTransportBridging
         )
     }
 

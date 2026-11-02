@@ -8,6 +8,7 @@ import Foundation
 final class CentralManagerBox: NSObject, CentralManaging, @unchecked Sendable {
     private var manager: CBCentralManager!
     private var boxesByIdentifier: [UUID: PeripheralBox] = [:]
+    private let boxesLock = NSLock()
 
     var state: BluetoothState {
         BluetoothState(manager.state)
@@ -17,6 +18,7 @@ final class CentralManagerBox: NSObject, CentralManaging, @unchecked Sendable {
     var onDiscover: ((PeripheralRepresenting, BLEAdvertisement, Int) -> Void)?
     var onConnect: ((PeripheralRepresenting) -> Void)?
     var onFailToConnect: ((PeripheralRepresenting, Error?) -> Void)?
+    var onConnectionEvent: ((ConnectionEvent.Kind, PeripheralRepresenting) -> Void)?
     var onDisconnect: ((PeripheralRepresenting, Error?) -> Void)?
 
     init(configuration: BLEClient.Configuration) {
@@ -33,6 +35,21 @@ final class CentralManagerBox: NSObject, CentralManaging, @unchecked Sendable {
         manager.scanForPeripherals(withServices: services, options: nil)
     }
 
+    func registerForConnectionEvents(matching filter: ConnectionEventFilter?) {
+        #if !os(macOS)
+        guard manager.state == .poweredOn else { return }
+        var options: [CBConnectionEventMatchingOption: Any]?
+        if let filter {
+            options = [:]
+            if !filter.serviceUUIDs.isEmpty { options?[.serviceUUIDs] = filter.serviceUUIDs }
+            if !filter.peripheralIdentifiers.isEmpty {
+                options?[.peripheralUUIDs] = Array(filter.peripheralIdentifiers)
+            }
+        }
+        manager.registerForConnectionEvents(options: options)
+        #endif
+    }
+
     func stopScan() {
         manager.stopScan()
     }
@@ -41,9 +58,19 @@ final class CentralManagerBox: NSObject, CentralManaging, @unchecked Sendable {
         manager.retrievePeripherals(withIdentifiers: identifiers).map { box(for: $0) }
     }
 
-    func connect(_ peripheral: PeripheralRepresenting) {
+    func retrieveConnectedPeripherals(withServices services: [CBUUID]) -> [PeripheralRepresenting] {
+        manager.retrieveConnectedPeripherals(withServices: services).map { box(for: $0) }
+    }
+
+    func connect(_ peripheral: PeripheralRepresenting, options: ConnectionOptions) {
         guard let box = peripheral as? PeripheralBox else { return }
-        manager.connect(box.peripheral, options: nil)
+        var nativeOptions: [String: Any]?
+        #if !os(macOS)
+        if options.enableTransportBridging {
+            nativeOptions = [CBConnectPeripheralOptionEnableTransportBridgingKey: NSNumber(value: true)]
+        }
+        #endif
+        manager.connect(box.peripheral, options: nativeOptions)
     }
 
     func cancelPeripheralConnection(_ peripheral: PeripheralRepresenting) {
@@ -52,6 +79,8 @@ final class CentralManagerBox: NSObject, CentralManaging, @unchecked Sendable {
     }
 
     private func box(for peripheral: CBPeripheral) -> PeripheralBox {
+        boxesLock.lock()
+        defer { boxesLock.unlock() }
         if let existing = boxesByIdentifier[peripheral.identifier] {
             return existing
         }
@@ -89,6 +118,16 @@ extension CentralManagerBox: CBCentralManagerDelegate {
             RSSI.intValue
         )
     }
+
+    #if !os(macOS)
+    func centralManager(_ central: CBCentralManager, connectionEventDidOccur event: CBConnectionEvent, for peripheral: CBPeripheral) {
+        switch event {
+        case .peerConnected: onConnectionEvent?(.connected, box(for: peripheral))
+        case .peerDisconnected: onConnectionEvent?(.disconnected, box(for: peripheral))
+        @unknown default: break
+        }
+    }
+    #endif
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         onConnect?(box(for: peripheral))

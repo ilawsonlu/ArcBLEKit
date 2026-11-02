@@ -25,6 +25,12 @@ public final class BLEClient: @unchecked Sendable {
         }
     }
 
+    let eventLock = NSLock()
+    // Serialize registration changes without holding the lock used by event delivery.
+    let eventRegistrationLock = NSRecursiveLock()
+    var eventID: UUID?
+    var eventFilter: ConnectionEventFilter?
+    var eventContinuation: AsyncThrowingStream<ConnectionEvent, Error>.Continuation?
     let central: CentralManaging
     private let lock = NSLock()
     private let scanLock = NSLock()
@@ -68,11 +74,20 @@ public final class BLEClient: @unchecked Sendable {
     init(central: CentralManaging) {
         self.central = central
         self.central.onStateChange = { [weak self] state in
+            self?.refreshConnectionEventRegistration(state: state)
             self?.publishBluetoothState(state)
+        }
+        self.central.onConnectionEvent = { [weak self] kind, peripheral in
+            self?.publishConnectionEvent(kind, peripheral: peripheral)
         }
         self.central.onDisconnect = { [weak self] peripheral, error in
             self?.session(identifier: peripheral.identifier)?.handleDisconnect(error: error)
         }
+    }
+
+    deinit {
+        eventContinuation?.finish()
+        central.registerForConnectionEvents(matching: nil)
     }
 
     func remember(_ peripheral: PeripheralRepresenting) {
@@ -182,6 +197,7 @@ public final class BLEClient: @unchecked Sendable {
     func startConnection(
         id: UUID,
         peripheral: PeripheralRepresenting,
+        options: ConnectionOptions,
         onSuperseded: @escaping @Sendable () -> Void,
         onConnect: @escaping @Sendable (PeripheralRepresenting) -> Void,
         onFailToConnect: @escaping @Sendable (PeripheralRepresenting, Error?) -> Void
@@ -205,7 +221,7 @@ public final class BLEClient: @unchecked Sendable {
             return
         }
 
-        central.connect(peripheral)
+        central.connect(peripheral, options: options)
     }
 
     func isActiveConnection(id: UUID) -> Bool {

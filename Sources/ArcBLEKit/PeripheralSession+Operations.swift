@@ -140,14 +140,18 @@ public extension PeripheralSession {
     /// Subscribes to characteristic value updates.
     ///
     /// Multiple streams for the same service and characteristic share the underlying CoreBluetooth
-    /// notification. Active streams are restored after a successful automatic reconnect.
+    /// notification. Automatic reconnect restores the same streams with their saved configuration.
+    /// Restoration permits setup failures only when every active consumer opts into compatibility,
+    /// and uses unfiltered discovery when any active consumer requests it. A strict consumer joining
+    /// a channel with unconfirmed setup must successfully enable notifications before it is added.
     ///
     /// - Parameters:
     ///   - characteristicUUID: The characteristic that produces updates.
     ///   - serviceUUID: The service containing the characteristic.
     ///   - options: The discovery and subscription timeout.
     ///   - allowUnsupportedProperties: Whether to try subscribing when the characteristic omits
-    ///     the `.notify` and `.indicate` properties.
+    ///     the `.notify` and `.indicate` properties, and tolerate notification setup rejection.
+    ///     Cancellation, disconnection, discovery errors, and timeouts still propagate.
     ///   - discoveryMode: Targeted discovery by default, or unfiltered discovery for legacy firmware.
     /// - Returns: A stream of characteristic values.
     /// - Throws: ``BLEError`` when discovery, validation, or notification setup fails.
@@ -166,52 +170,38 @@ public extension PeripheralSession {
                 serviceUUID: serviceUUID,
                 characteristicUUID: characteristicUUID
             )
-            let characteristic = try await self.resolveCharacteristic(
-                characteristicUUID,
-                service: serviceUUID,
-                options: options,
+            let configuration = NotificationSubscriptionConfiguration(
+                allowUnsupportedProperties: allowUnsupportedProperties,
                 discoveryMode: discoveryMode
             )
+            while true {
+                let snapshot = self.notificationRegistry.snapshot(for: id)
+                guard let prepared = try await self.prepareNotification(
+                    for: id,
+                    configuration: configuration,
+                    options: options,
+                    reusing: snapshot,
+                    restoring: false
+                ) else { continue }
+                try self.ensureConnected()
+                try Task.checkCancellation()
 
-            if !allowUnsupportedProperties,
-               !characteristic.properties.contains(.notify),
-               !characteristic.properties.contains(.indicate) {
-                throw BLEError.unsupportedCharacteristicOperation(
-                    characteristicUUID,
-                    operation: .notificationSetup
-                )
-            }
-
-            if !self.notificationRegistry.hasSubscribers(for: id) {
-                do {
-                    try await self.setNotifications(
-                        true,
-                        characteristic: characteristic,
-                        id: id,
-                        options: options
-                    )
-                } catch let error as BLEError {
-                    guard allowUnsupportedProperties,
-                          case .notificationSetupFailed = error
-                    else {
-                        throw error
+                let subscriberID = UUID()
+                return AsyncThrowingStream { continuation in
+                    continuation.onTermination = { [weak self] _ in
+                        self?.notificationTerminated(
+                            subscriberID: subscriberID,
+                            id: id,
+                            options: options
+                        )
                     }
-                }
-            }
-
-            let subscriberID = UUID()
-            return AsyncThrowingStream { continuation in
-                self.notificationRegistry.add(
-                    continuation,
-                    subscriberID: subscriberID,
-                    characteristic: characteristic,
-                    for: id
-                )
-                continuation.onTermination = { [weak self] _ in
-                    self?.notificationTerminated(
+                    self.notificationRegistry.add(
+                        continuation,
                         subscriberID: subscriberID,
-                        id: id,
-                        options: options
+                        characteristic: prepared.characteristic,
+                        configuration: configuration,
+                        setupState: prepared.setupState,
+                        for: id
                     )
                 }
             }
@@ -290,25 +280,101 @@ extension PeripheralSession {
     }
 
     func restoreNotifications(options: GATTOperationOptions) async throws {
-        for id in notificationRegistry.activeIDs() {
+        for scheduled in notificationRegistry.snapshots() {
             try await operationQueue.run {
-                let characteristic = try await self.resolveCharacteristic(
-                    id.characteristicUUID,
-                    service: id.serviceUUID,
-                    options: options
-                )
-                try await self.setNotifications(
-                    true,
-                    characteristic: characteristic,
-                    id: id,
-                    options: options
-                )
-                self.notificationRegistry.update(
-                    characteristic: characteristic,
-                    for: id
-                )
+                while let snapshot = self.notificationRegistry.snapshot(for: scheduled.id),
+                      snapshot.generation == scheduled.generation {
+                    do {
+                        guard let prepared = try await self.prepareNotification(
+                            for: snapshot.id,
+                            configuration: snapshot.configuration,
+                            options: options,
+                            reusing: snapshot,
+                            restoring: true
+                        ) else { continue }
+                        if self.notificationRegistry.update(
+                            characteristic: prepared.characteristic,
+                            setupState: prepared.setupState,
+                            for: snapshot
+                        ) { return }
+                    } catch {
+                        guard let current = self.notificationRegistry.snapshot(for: snapshot.id),
+                              current.generation == snapshot.generation else { return }
+                        // Cancellation can remove the strict consumer while validation is suspended.
+                        // Re-evaluate only configuration-dependent errors; transport errors still fail.
+                        if !self.notificationRegistry.isCurrent(snapshot),
+                           let bleError = error as? BLEError {
+                            switch bleError {
+                            case .notificationSetupFailed, .unsupportedCharacteristicOperation:
+                                continue
+                            default: break
+                            }
+                        }
+                        throw error
+                    }
+                }
             }
         }
+    }
+
+    private struct PreparedNotification {
+        let characteristic: CharacteristicRepresenting
+        let setupState: NotificationSetupState
+    }
+
+    /// Runs inside the caller's operationQueue slot, never by recursively acquiring the queue.
+    private func prepareNotification(
+        for id: GATTCharacteristicID,
+        configuration: NotificationSubscriptionConfiguration,
+        options: GATTOperationOptions,
+        reusing snapshot: NotificationRegistry.Snapshot?,
+        restoring: Bool
+    ) async throws -> PreparedNotification? {
+        try ensureConnected()
+        let characteristic = try await resolveCharacteristic(
+            id.characteristicUUID,
+            service: id.serviceUUID,
+            options: options,
+            discoveryMode: configuration.discoveryMode
+        )
+        try ensureConnected()
+        try Task.checkCancellation()
+        if let snapshot, !notificationRegistry.isCurrent(snapshot) { return nil }
+
+        if !configuration.allowUnsupportedProperties,
+           !characteristic.properties.contains(.notify),
+           !characteristic.properties.contains(.indicate) {
+            throw BLEError.unsupportedCharacteristicOperation(
+                id.characteristicUUID,
+                operation: .notificationSetup
+            )
+        }
+
+        let existingState = snapshot?.setupState ?? .inactive
+        let needsSetup = restoring || existingState == .inactive ||
+            (!configuration.allowUnsupportedProperties && existingState != .confirmed)
+        guard needsSetup else {
+            return PreparedNotification(characteristic: characteristic, setupState: existingState)
+        }
+        if let snapshot, !notificationRegistry.beginSetup(characteristic: characteristic, for: snapshot) { return nil }
+
+        let setupState: NotificationSetupState
+        do {
+            try await setNotifications(
+                true,
+                characteristic: characteristic,
+                id: id,
+                options: options
+            )
+            setupState = .confirmed
+        } catch let error as BLEError {
+            guard configuration.allowUnsupportedProperties,
+                  case .notificationSetupFailed = error else { throw error }
+            setupState = .unconfirmed
+        }
+        try ensureConnected()
+        try Task.checkCancellation()
+        return PreparedNotification(characteristic: characteristic, setupState: setupState)
     }
 
     private func resolveCharacteristic(
@@ -548,7 +614,7 @@ extension PeripheralSession {
         Task { [weak self] in
             guard let self, self.isConnected else { return }
             try? await self.operationQueue.run {
-                guard !self.notificationRegistry.hasSubscribers(for: id) else {
+                guard self.isConnected, !self.notificationRegistry.hasSubscribers(for: id) else {
                     return
                 }
                 try await self.setNotifications(

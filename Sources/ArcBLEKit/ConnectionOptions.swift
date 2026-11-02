@@ -2,18 +2,24 @@ import Foundation
 
 /// Timeout and recovery behavior for a peripheral connection.
 public struct ConnectionOptions: Equatable, Sendable {
-    /// The maximum number of seconds allowed for connection and reconnect operations.
+    /// The maximum connection duration; `reconnect` shares this budget across retrieval, scan, and connection.
     public var timeout: TimeInterval
     /// The policy applied after an unexpected disconnect.
     public var autoReconnect: AutoReconnectPolicy
 
+    /// Requests classic Bluetooth profiles after an LE connection on compatible dual-mode hardware.
+    /// This does not guarantee audio readiness. Ignored on macOS.
+    public var enableTransportBridging: Bool
+
     /// Creates connection options.
     public init(
         timeout: TimeInterval = 10,
-        autoReconnect: AutoReconnectPolicy = .disabled
+        autoReconnect: AutoReconnectPolicy = .disabled,
+        enableTransportBridging: Bool = false
     ) {
         self.timeout = timeout
         self.autoReconnect = autoReconnect
+        self.enableTransportBridging = enableTransportBridging
     }
 }
 

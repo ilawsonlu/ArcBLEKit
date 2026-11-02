@@ -35,6 +35,18 @@ let session = try await client.reconnect(
 
 The identifier is assigned by CoreBluetooth for the current app and Apple device context. It is not a Bluetooth MAC address and should not be treated as a cross-device identity.
 
+## Reuse a system connection
+
+After Bluetooth is ready, use `try client.retrieveConnectedDevices(withServices: [serviceUUID])` and select the saved peripheral identifier. Call `connect(to:)` even when the device is already connected to the system: the app still needs its own GATT session. These snapshots have unknown RSSI (zero) and no advertisement data.
+
+On iOS, `client.connectionEvents(matching: ConnectionEventFilter(serviceUUIDs: [serviceUUID]))` observes future system peer connections and disconnections. Services and identifiers match with OR. Each client owns one event stream; a new stream finishes the old one, and cancelling consumption clears registration. An empty filter finishes immediately. Matching resumes when Bluetooth powers back on. This API is unavailable on macOS.
+
+For compatible CTKD dual-mode hardware, opt into `ConnectionOptions(enableTransportBridging: true)` to request classic profiles after an LE connection. The setting is preserved across automatic reconnect attempts and ignored on macOS. A GATT connection or peer event does not confirm audio readiness.
+
+`reconnect` shares `options.timeout` across retrieval, scanning, and connecting. Its optional `fallbackOnConnectionFailure: true` reserves half the budget for scan recovery when a retrieved peripheral fails to connect. Only connection failure or timeout triggers that recovery; cancellation and permission errors propagate immediately. Scan fallback always requires the saved identifier. The resulting session retains the original timeout for future automatic recovery.
+
+Persisting devices, selecting a preferred peer, avoiding duplicate connection tasks, and suppressing automatic connection after manual disconnection remain app responsibilities. Full app-relaunch state restoration is not implemented.
+
 ## Operation behavior during disconnects
 
 Pending reads, writes, discovery, and notification setup fail when the peripheral disconnects. Run a new operation after the session reports `.ready` again rather than retrying an old continuation.
@@ -57,3 +69,17 @@ let updates = try await session.notifications(
 ```
 
 Apply compatibility settings only to affected peripherals because they relax validation or perform more discovery work.
+
+The session saves each consumer's compatibility and discovery settings and restores the original
+streams after reconnecting. For consumers sharing a service and characteristic:
+
+- Setup rejection is tolerated only when every active consumer enables `allowUnsupportedProperties`.
+- Discovery uses `.all` when any active consumer requests it, otherwise `.targeted`.
+- A strict consumer joining a channel with tolerated setup failure must pass property validation
+  and successfully enable notifications before joining. Failure leaves existing consumers intact.
+- Cancelling a consumer removes its settings. Only the last consumer disables the underlying
+  subscription. Restoration checks the subscription generation before enabling or updating it.
+
+Compatibility does not ignore cancellation, disconnection, discovery errors, or timeouts. Initial
+setup uses that invocation's ``GATTOperationOptions``; restoration uses the session's
+``ConnectionOptions/timeout``. A restoration failure still ends the session and its active streams.

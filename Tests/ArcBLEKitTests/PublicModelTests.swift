@@ -42,6 +42,7 @@ final class PublicModelTests: XCTestCase {
 
         XCTAssertEqual(options.timeout, 10)
         XCTAssertEqual(options.autoReconnect, .disabled)
+        XCTAssertFalse(options.enableTransportBridging)
     }
 
     func testBLEErrorEquatableForIdentifierErrors() {

@@ -3,6 +3,13 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var viewModel = ArcBLESampleViewModel()
+    @Environment(\.scenePhase) private var scenePhase
+
+    private struct AutomaticConnectionContext: Equatable {
+        let enabled: Bool
+        let identifier: String
+        let isForeground: Bool
+    }
 
     var body: some View {
         NavigationView {
@@ -16,6 +23,13 @@ struct ContentView: View {
                 logSection
             }
             .navigationTitle("ArcBLE Sample")
+        }
+        .task(id: AutomaticConnectionContext(
+            enabled: viewModel.autoConnectSavedDevice,
+            identifier: viewModel.savedIdentifierText,
+            isForeground: scenePhase == .active
+        )) {
+            await viewModel.runAutomaticConnection(isForeground: scenePhase == .active)
         }
     }
 
@@ -48,6 +62,7 @@ struct ContentView: View {
                             viewModel.connect(to: device)
                         }
                     )
+                    .disabled(viewModel.isConnecting)
                 }
             }
         }
@@ -63,12 +78,19 @@ struct ContentView: View {
                     .font(.footnote)
             }
 
+            Toggle("Auto-connect Saved Device", isOn: $viewModel.autoConnectSavedDevice)
+
+            Text("Restores the saved device when this app is active. Disconnect pauses automatic connection until you reconnect or enable it again.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
             Button(action: viewModel.reconnectSavedDevice) {
                 HStack {
                     Image(systemName: "arrow.clockwise")
                     Text("Reconnect Saved Device")
                 }
             }
+            .disabled(viewModel.isConnecting)
 
             Button(action: viewModel.clearSavedIdentifier) {
                 HStack {
@@ -82,6 +104,12 @@ struct ContentView: View {
 
     private var statusSection: some View {
         Section(header: Text("Connection")) {
+            Toggle("Connect Audio Too", isOn: $viewModel.enableTransportBridging)
+
+            Text("Requires a compatible dual-mode accessory. A control connection does not confirm that audio is ready.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
             HStack {
                 Text("Status")
                 Spacer()
@@ -95,7 +123,7 @@ struct ContentView: View {
                     Text("Disconnect")
                 }
             }
-            .disabled(viewModel.connectedDeviceID == nil)
+            .disabled(!viewModel.canDisconnect)
         }
     }
 

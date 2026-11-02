@@ -62,7 +62,7 @@ Or add ArcBLEKit to a package manifest:
 dependencies: [
     .package(
         url: "https://github.com/ilawsonlu/ArcBLEKit.git",
-        from: "0.2.3"
+        from: "0.2.5"
     )
 ]
 ```
@@ -131,6 +131,32 @@ let session = try await client.reconnect(
 
 The identifier is assigned by CoreBluetooth for the current app and Apple device context. It is not a global BLE MAC address.
 
+## System Connections and Dual-Mode Accessories
+
+After Bluetooth is ready, call `try client.retrieveConnectedDevices(withServices: [serviceUUID])`, select the saved identifier, then use `connect(to:)` to establish this client's GATT session. An empty service list returns no devices. Retrieved snapshots have unknown RSSI (zero) and empty advertisement fields; they do not indicate audio readiness.
+
+For compatible CTKD dual-mode hardware, `ConnectionOptions(enableTransportBridging: true)` requests classic Bluetooth profiles after LE connects. The default is false; macOS ignores this option. The system handles pairing, and the app tracks audio readiness separately.
+
+On iOS, observe future system peer events using:
+
+```swift
+#if os(iOS)
+for try await event in client.connectionEvents(
+    matching: ConnectionEventFilter(serviceUUIDs: [serviceUUID])
+) {
+    if event.kind == .connected, event.device.id == savedID {
+        // Route through one app-owned connection task to avoid duplicate requests.
+    }
+}
+#endif
+```
+
+Services and identifiers match with OR. An empty filter finishes immediately. Each client owns one event stream: a new subscription finishes the old one; cancelling consumption clears registration. Matching is registered again when Bluetooth powers back on. Events do not establish GATT sessions or confirm audio readiness. This event API is unavailable on macOS.
+
+`reconnect` shares `options.timeout` across the entire recovery. With `fallbackOnConnectionFailure: true` and a fallback scan, half the budget is reserved for scan recovery after connection failure or timeout. Cancellation and permission errors do not trigger fallback. Scanning accepts only the requested identifier. The resulting session retains the full timeout and reconnect policy.
+
+The app owns saved devices, auto-connect preferences, and suppression after manual disconnection. Full background state restoration is not included.
+
 ## Read and Write
 
 ```swift
@@ -184,6 +210,15 @@ let updates = try await session.notifications(
 
 Keep the strict defaults for compliant peripherals.
 
+Each consumer's compatibility and discovery settings are preserved across automatic reconnects;
+the original streams continue receiving values. Shared restoration tolerates notification setup
+rejection only when every active consumer sets `allowUnsupportedProperties: true`, and uses `.all`
+discovery when any active consumer requests it. A strict consumer joining a channel whose setup
+was tolerated must pass property validation and receive successful setup confirmation first.
+Cancelling a consumer removes its settings; only the last consumer disables the notification.
+Cancellation, disconnection, discovery errors, and timeouts are never ignored by compatibility mode.
+Initial setup uses that call's operation timeout; restoration uses the session's connection timeout.
+
 ## Bluetooth and Connection States
 
 ```swift
@@ -204,7 +239,7 @@ All GATT operations have a timeout, support task cancellation, and fail pending 
 - [Real-device sample app](Examples/ArcBLESampleApp)
 - [Changelog](CHANGELOG.md)
 
-The sample app demonstrates scanning, persisted peripheral identifiers, connection and reconnect flows, configurable GATT operations, notifications, and connection-state logging on a physical iPhone or iPad.
+The sample app demonstrates scanning, persisted peripheral identifiers and services, opt-in foreground automatic recovery, system-connection reuse, optional audio bridging, configurable GATT operations, notifications, and connection-state logging on a physical iPhone or iPad. Manual disconnect pauses foreground automatic recovery until the user explicitly resumes it.
 
 ## State Restoration
 
