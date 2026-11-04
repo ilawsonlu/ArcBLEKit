@@ -29,7 +29,7 @@ let value = try await session.read(
 - **可靠的重连机制** — 内置有限次数的自动重试策略和通知恢复。
 - **安全的 GATT 写入** — 自动处理特征能力、最大负载长度和 `.withoutResponse` 写入背压。
 - **精确的通知订阅** — 使用服务 UUID 与特征 UUID 共同标识通知，多个消费者共享底层订阅。
-- **轻量集成** — 无第三方依赖，支持 iOS 14+、macOS 11+ 和 Swift 5.5+。
+- **轻量集成** — 无第三方依赖，支持 iOS 15+、macOS 11+ 和 Swift 5.5+。
 
 | 能力 | 直接使用 CoreBluetooth | ArcBLEKit |
 | --- | --- | --- |
@@ -43,10 +43,10 @@ let value = try await session.read(
 ## 环境要求
 
 - Swift 5.5+
-- iOS 14.0+ 或 macOS 11.0+
+- iOS 15.0+ 或 macOS 11.0+
 - Swift Package Manager
 
-Xcode 27 支持的最低部署目标为 iOS 15 和 macOS 12。ArcBLEKit 保留较低的 Package 平台声明，供使用兼容旧版 Xcode 的项目继续使用。
+Xcode 27 支持的最低部署目标为 iOS 15 和 macOS 12。Package 清单保留旧平台声明，以兼容旧版工具链。
 
 ## 安装
 

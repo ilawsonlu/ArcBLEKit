@@ -29,7 +29,7 @@ let value = try await session.read(
 - **Reliable reconnects** — finite automatic retry policies and notification restoration are built in.
 - **Safe GATT writes** — characteristic capabilities, maximum payload length, and `.withoutResponse` backpressure are handled for you.
 - **Precise subscriptions** — notifications are keyed by service and characteristic UUID, and multiple consumers share the underlying subscription.
-- **Focused integration** — no third-party dependencies and support for iOS 14+, macOS 11+, and Swift 5.5+.
+- **Focused integration** — no third-party dependencies and support for iOS 15+, macOS 11+, and Swift 5.5+.
 
 | Capability | Direct CoreBluetooth | ArcBLEKit |
 | --- | --- | --- |
@@ -43,10 +43,10 @@ let value = try await session.read(
 ## Requirements
 
 - Swift 5.5+
-- iOS 14.0+ or macOS 11.0+
+- iOS 15.0+ or macOS 11.0+
 - Swift Package Manager
 
-Xcode 27 supports deployment targets starting with iOS 15 and macOS 12. ArcBLEKit keeps its lower package declarations for consumers that build with compatible earlier Xcode versions.
+Xcode 27 supports deployment targets starting with iOS 15 and macOS 12. The package manifest retains legacy platform declarations for compatibility with older toolchains.
 
 ## Installation
 
