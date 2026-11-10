@@ -31,8 +31,15 @@ final class CentralManagerBox: NSObject, CentralManaging, @unchecked Sendable {
         self.manager = CBCentralManager(delegate: self, queue: nil, options: options)
     }
 
-    func scanForPeripherals(withServices services: [CBUUID]?) {
-        manager.scanForPeripherals(withServices: services, options: nil)
+    func scanForPeripherals(withServices services: [CBUUID]?, options: ScanOptions) {
+        var nativeOptions: [String: Any] = [:]
+        if options.allowDuplicates {
+            nativeOptions[CBCentralManagerScanOptionAllowDuplicatesKey] = NSNumber(value: true)
+        }
+        if !options.solicitedServiceUUIDs.isEmpty {
+            nativeOptions[CBCentralManagerScanOptionSolicitedServiceUUIDsKey] = options.solicitedServiceUUIDs
+        }
+        manager.scanForPeripherals(withServices: services, options: nativeOptions.isEmpty ? nil : nativeOptions)
     }
 
     func registerForConnectionEvents(matching filter: ConnectionEventFilter?) {
@@ -82,6 +89,8 @@ final class CentralManagerBox: NSObject, CentralManaging, @unchecked Sendable {
         boxesLock.lock()
         defer { boxesLock.unlock() }
         if let existing = boxesByIdentifier[peripheral.identifier] {
+            // After a power cycle CoreBluetooth may hand out a new object for the same identifier.
+            existing.replacePeripheral(with: peripheral)
             return existing
         }
 

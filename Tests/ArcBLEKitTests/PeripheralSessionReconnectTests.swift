@@ -33,10 +33,8 @@ final class PeripheralSessionReconnectTests: XCTestCase {
         let session = try await connectTask.value
         var iterator = session.connectionStates.makeAsyncIterator()
 
-        let connected = await iterator.next()
-        let ready = await iterator.next()
-        XCTAssertEqual(connected, .connected)
-        XCTAssertEqual(ready, .ready)
+        let current = await iterator.next()
+        XCTAssertEqual(current, .ready)
         central.disconnect(peripheral)
 
         let state = await iterator.next()
@@ -72,10 +70,8 @@ final class PeripheralSessionReconnectTests: XCTestCase {
         let session = try await connectTask.value
         var iterator = session.connectionStates.makeAsyncIterator()
 
-        let connected = await iterator.next()
-        let ready = await iterator.next()
-        XCTAssertEqual(connected, .connected)
-        XCTAssertEqual(ready, .ready)
+        let current = await iterator.next()
+        XCTAssertEqual(current, .ready)
         central.disconnect(peripheral)
         let disconnected = await iterator.next()
         let reconnecting = await iterator.next()
@@ -150,8 +146,7 @@ final class PeripheralSessionReconnectTests: XCTestCase {
         central.completeConnection(peripheral)
         let session = try await connectTask.value
         var iterator = session.connectionStates.makeAsyncIterator()
-        _ = await iterator.next()
-        _ = await iterator.next()
+        await assertNext(&iterator, equals: .ready)
 
         central.disconnect(peripheral)
         await assertNext(&iterator, equals: .disconnected)
@@ -194,8 +189,7 @@ final class PeripheralSessionReconnectTests: XCTestCase {
         central.completeConnection(peripheral)
         let session = try await connectTask.value
         var iterator = session.connectionStates.makeAsyncIterator()
-        _ = await iterator.next()
-        _ = await iterator.next()
+        await assertNext(&iterator, equals: .ready)
 
         central.disconnect(peripheral)
         await assertNext(&iterator, equals: .disconnected)
@@ -266,8 +260,7 @@ final class PeripheralSessionReconnectTests: XCTestCase {
         let stream = try await streamTask.value
         var notificationIterator = stream.makeAsyncIterator()
         var stateIterator = session.connectionStates.makeAsyncIterator()
-        _ = await stateIterator.next()
-        _ = await stateIterator.next()
+        await assertNext(&stateIterator, equals: .ready)
 
         central.disconnect(peripheral)
         await assertNext(&stateIterator, equals: .disconnected)

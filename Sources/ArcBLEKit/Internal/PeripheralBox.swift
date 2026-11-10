@@ -17,7 +17,8 @@ final class ServiceBox: ServiceRepresenting, @unchecked Sendable {
 final class CharacteristicBox: CharacteristicRepresenting, @unchecked Sendable {
     let characteristic: CBCharacteristic
     var uuid: CBUUID { characteristic.uuid }
-    var serviceUUID: CBUUID { characteristic.service?.uuid ?? CBUUID(string: "") }
+    // `CBUUID(string: "")` raises an Objective-C exception, so never fabricate a UUID here.
+    var serviceUUID: CBUUID? { characteristic.service?.uuid }
     var properties: CBCharacteristicProperties { characteristic.properties }
     var isNotifying: Bool { characteristic.isNotifying }
 
@@ -27,7 +28,14 @@ final class CharacteristicBox: CharacteristicRepresenting, @unchecked Sendable {
 }
 
 final class PeripheralBox: NSObject, PeripheralRepresenting, @unchecked Sendable {
-    let peripheral: CBPeripheral
+    private let peripheralLock = NSLock()
+    private var currentPeripheral: CBPeripheral
+
+    var peripheral: CBPeripheral {
+        peripheralLock.lock()
+        defer { peripheralLock.unlock() }
+        return currentPeripheral
+    }
 
     var identifier: UUID { peripheral.identifier }
     var name: String? { peripheral.name }
@@ -35,9 +43,21 @@ final class PeripheralBox: NSObject, PeripheralRepresenting, @unchecked Sendable
     var onEvent: ((PeripheralEvent) -> Void)?
 
     init(peripheral: CBPeripheral) {
-        self.peripheral = peripheral
+        self.currentPeripheral = peripheral
         super.init()
-        self.peripheral.delegate = self
+        peripheral.delegate = self
+    }
+
+    /// Adopts a newer CoreBluetooth object for the same identifier, keeping sessions attached.
+    func replacePeripheral(with peripheral: CBPeripheral) {
+        peripheralLock.lock()
+        guard currentPeripheral !== peripheral else {
+            peripheralLock.unlock()
+            return
+        }
+        currentPeripheral = peripheral
+        peripheralLock.unlock()
+        peripheral.delegate = self
     }
 
     func discoverServices(_ serviceUUIDs: [CBUUID]?) {
@@ -121,5 +141,9 @@ extension PeripheralBox: CBPeripheralDelegate {
 
     func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
         onEvent?(.readyToWriteWithoutResponse)
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
+        onEvent?(.servicesModified(invalidatedServices.map(ServiceBox.init(service:))))
     }
 }

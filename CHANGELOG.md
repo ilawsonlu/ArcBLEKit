@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- End active scans, pending connections, and sessions when Bluetooth turns off or resets; CoreBluetooth reports no individual disconnects then. Automatic reconnect waits for Bluetooth to power back on within the connection timeout and retrieves the peripheral again.
+- `PeripheralSession.connectionStates` now returns an independent stream per access that starts with the current state, so several consumers can observe one session. Add `PeripheralSession.connectionState`. Consumers no longer receive the earlier `.connected` replay before `.ready`.
+- Fix a crash when CoreBluetooth reports a characteristic whose service was already released.
+- Handle service invalidation: drop cached attributes for invalidated services and re-subscribe affected notification streams, finishing only those streams if a service disappears.
+- Continue automatic reconnect with the next attempt when the link drops again while restoring notifications, instead of ending the session.
+- Add `scan(filter:options:)` and `ScanOptions` for duplicate advertisements and solicited service UUIDs.
+- Accept `.infinity` as a connection or `findDevice` timeout to wait until completion or cancellation.
+- Sample app: add **Wait Indefinitely** for connections without a timeout, and **Report Duplicate Advertisements** with a per-device advertisement count.
+- Fix a new session for an already-connected peripheral never receiving GATT events: replacing the previous session no longer clears the shared peripheral event handler.
+- Track pending connections per peripheral. Connecting to, or automatically reconnecting, one peripheral no longer cancels an in-flight connection to another; only a newer attempt for the same peripheral supersedes an older one.
+
 ## 0.2.5
 
 - Preserve each notification consumer's compatibility and discovery configuration during automatic reconnect, restoring the original streams without a new session.

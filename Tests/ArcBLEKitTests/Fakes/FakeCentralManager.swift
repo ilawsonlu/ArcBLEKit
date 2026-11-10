@@ -19,6 +19,7 @@ final class FakeCentralManager: CentralManaging, @unchecked Sendable {
     @TestLocked var onDisconnect: ((PeripheralRepresenting, Error?) -> Void)?
 
     @TestLocked private(set) var scannedServiceUUIDs: [CBUUID]?
+    @TestLocked private(set) var scanOptions: ScanOptions?
     @TestLocked private(set) var scanForPeripheralsCallCount = 0
     @TestLocked private(set) var didStopScan = false
     @TestLocked private(set) var stopScanCallCount = 0
@@ -34,10 +35,12 @@ final class FakeCentralManager: CentralManaging, @unchecked Sendable {
         self.state = state
     }
 
-    func scanForPeripherals(withServices services: [CBUUID]?) {
-        scanForPeripheralsCallCount += 1
+    func scanForPeripherals(withServices services: [CBUUID]?, options: ScanOptions) {
+        // Record arguments before the count that tests wait on.
         scannedServiceUUIDs = services
+        scanOptions = options
         didStopScan = false
+        scanForPeripheralsCallCount += 1
     }
 
     func registerForConnectionEvents(matching filter: ConnectionEventFilter?) {

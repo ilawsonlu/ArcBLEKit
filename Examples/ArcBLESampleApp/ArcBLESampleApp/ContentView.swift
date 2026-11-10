@@ -39,6 +39,13 @@ struct ContentView: View {
                 .autocapitalization(.allCharacters)
                 .disableAutocorrection(true)
 
+            Toggle("Report Duplicate Advertisements", isOn: $viewModel.reportDuplicateAdvertisements)
+                .disabled(viewModel.isScanning)
+
+            Text("Updates RSSI and broadcast data on every advertisement. Uses more power; iOS ignores it in the background. Applies to the next scan.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
             Button(action: toggleScan) {
                 HStack {
                     Image(systemName: viewModel.isScanning ? "stop.fill" : "antenna.radiowaves.left.and.right")
@@ -57,6 +64,7 @@ struct ContentView: View {
                 ForEach(viewModel.devices) { device in
                     DeviceRow(
                         device: device,
+                        advertisementCount: viewModel.advertisementCounts[device.id] ?? 0,
                         isConnected: viewModel.connectedDeviceID == device.id,
                         connect: {
                             viewModel.connect(to: device)
@@ -104,6 +112,13 @@ struct ContentView: View {
 
     private var statusSection: some View {
         Section(header: Text("Connection")) {
+            Toggle("Wait Indefinitely", isOn: $viewModel.waitIndefinitely)
+                .disabled(viewModel.isConnecting)
+
+            Text("Connects whenever the device comes into range, with no timeout. Tap Disconnect to stop waiting. Applies to the next connection.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
             Toggle("Connect Audio Too", isOn: $viewModel.enableTransportBridging)
 
             Text("Requires a compatible dual-mode accessory. A control connection does not confirm that audio is ready.")
@@ -235,6 +250,7 @@ struct ContentView: View {
 
 private struct DeviceRow: View {
     let device: BLEDevice
+    let advertisementCount: Int
     let isConnected: Bool
     let connect: () -> Void
 
@@ -249,9 +265,12 @@ private struct DeviceRow: View {
                         .foregroundColor(.secondary)
                 }
                 Spacer()
-                Text("\(device.rssi) dBm")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("\(device.rssi) dBm")
+                    Text("\(advertisementCount) adv")
+                }
+                .font(.caption)
+                .foregroundColor(.secondary)
             }
 
             HStack {

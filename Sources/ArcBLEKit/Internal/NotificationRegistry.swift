@@ -158,9 +158,9 @@ final class NotificationRegistry {
         return true
     }
 
-    func invalidateSetups() {
+    func invalidateSetups(for ids: Set<GATTCharacteristicID>? = nil) {
         lock.lock()
-        for id in Array(entries.keys) {
+        for id in Array(entries.keys) where ids?.contains(id) ?? true {
             entries[id]?.revision = UUID()
             entries[id]?.setupState = .inactive
         }

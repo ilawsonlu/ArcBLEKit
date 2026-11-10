@@ -92,7 +92,20 @@ for try await device in client.scan(
 }
 ```
 
-`scan(filter:)` reports Bluetooth power, authorization, and availability failures instead of ending silently. Cancel the consuming task when the UI no longer needs scan results.
+`scan(filter:)` reports Bluetooth power, authorization, and availability failures instead of ending silently, including when Bluetooth turns off mid-scan. Cancel the consuming task when the UI no longer needs scan results.
+
+To follow RSSI or read data that devices broadcast in advertisements, report every advertisement instead of one per peripheral:
+
+```swift
+for try await reading in client.scan(
+    filter: ScanFilter(namePrefix: "Thermo"),
+    options: ScanOptions(allowDuplicates: true)
+) {
+    print(reading.rssi, reading.manufacturerData ?? Data())
+}
+```
+
+iOS ignores `allowDuplicates` while the app is in the background.
 
 ## Find and Connect
 
@@ -152,6 +165,8 @@ for try await event in client.connectionEvents(
 ```
 
 Services and identifiers match with OR. An empty filter finishes immediately. Each client owns one event stream: a new subscription finishes the old one; cancelling consumption clears registration. Matching is registered again when Bluetooth powers back on. Events do not establish GATT sessions or confirm audio readiness. This event API is unavailable on macOS.
+
+Pass `ConnectionOptions(timeout: .infinity)` to keep a pending connection until the device comes back into range; cancel the task to stop waiting. Connections to different peripherals proceed independently.
 
 `reconnect` shares `options.timeout` across the entire recovery. With `fallbackOnConnectionFailure: true` and a fallback scan, half the budget is reserved for scan recovery after connection failure or timeout. Cancellation and permission errors do not trigger fallback. Scanning accepts only the requested identifier. The resulting session retains the full timeout and reconnect policy.
 
@@ -217,7 +232,10 @@ discovery when any active consumer requests it. A strict consumer joining a chan
 was tolerated must pass property validation and receive successful setup confirmation first.
 Cancelling a consumer removes its settings; only the last consumer disables the notification.
 Cancellation, disconnection, discovery errors, and timeouts are never ignored by compatibility mode.
-Initial setup uses that call's operation timeout; restoration uses the session's connection timeout.
+Initial setup uses that call's operation timeout; restoration uses the session's connection timeout, or the default GATT timeout when the connection timeout is unlimited.
+If the peripheral drops again while streams are being restored, the next reconnect attempt is used.
+When a peripheral invalidates services (for example after a firmware update), affected streams are
+re-subscribed through fresh discovery; if a service disappears, only its streams finish with an error.
 
 ## Bluetooth and Connection States
 
@@ -230,6 +248,10 @@ for await state in session.connectionStates {
     print("Connection:", state)
 }
 ```
+
+Each `connectionStates` access returns an independent stream that starts with the current state, so several consumers can observe one session. Read `session.connectionState` for a snapshot.
+
+When Bluetooth turns off or resets, active scans and pending connections fail, and sessions report a disconnect. With automatic reconnect enabled, each attempt waits for Bluetooth to power back on within the connection timeout.
 
 All GATT operations have a timeout, support task cancellation, and fail pending work when the peripheral disconnects.
 

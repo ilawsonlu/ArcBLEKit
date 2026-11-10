@@ -41,7 +41,7 @@ let session = try await client.connect(
 )
 ```
 
-To present every matching device instead, iterate the throwing stream returned by `scan(filter:)`. End the task or stop iterating when the UI no longer needs scan results.
+To present every matching device instead, iterate the throwing stream returned by `scan(filter:)`. End the task or stop iterating when the UI no longer needs scan results. Use `scan(filter:options:)` with ``ScanOptions/allowDuplicates`` to receive repeated advertisements, for example to follow RSSI or broadcast sensor data.
 
 ## Read and write
 

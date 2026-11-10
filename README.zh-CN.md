@@ -92,7 +92,20 @@ for try await device in client.scan(
 }
 ```
 
-`scan(filter:)` 会明确报告蓝牙电源、授权和可用性错误，而不是静默结束。当界面不再需要扫描结果时，请取消消费该异步流的任务。
+`scan(filter:)` 会明确报告蓝牙电源、授权和可用性错误，而不是静默结束；扫描过程中关闭蓝牙也会以错误结束。当界面不再需要扫描结果时，请取消消费该异步流的任务。
+
+如需持续跟踪 RSSI，或读取设备放在广播里的数据，可让同一设备的每条广播都上报：
+
+```swift
+for try await reading in client.scan(
+    filter: ScanFilter(namePrefix: "Thermo"),
+    options: ScanOptions(allowDuplicates: true)
+) {
+    print(reading.rssi, reading.manufacturerData ?? Data())
+}
+```
+
+App 处于后台时，iOS 会忽略 `allowDuplicates`。
 
 ## 查找并连接
 
@@ -163,6 +176,8 @@ for try await event in client.connectionEvents(
 
 服务与设备 identifier 按 OR 匹配；空过滤器直接结束。每个 client 只有一个事件流，新订阅结束旧订阅，取消消费任务清除注册；蓝牙再次开启后重新注册。事件仅反映系统 peer 状态，不能直接当成 GATT 会话或音频已就绪。macOS 不提供该事件 API。
 
+传入 `ConnectionOptions(timeout: .infinity)` 可保持一个不超时的待连接请求，直到设备回到范围内；取消任务即可停止等待。不同外设的连接互不影响。
+
 `reconnect` 的 `options.timeout` 为整次恢复的共享预算。设置 `fallbackOnConnectionFailure: true` 且提供 `fallbackScan` 时，会为扫描恢复预留一半预算；仅连接失败或超时触发回退，取消和权限错误不会触发。回退扫描只接受目标 identifier。成功后的会话仍保留完整超时和重连策略。
 
 设备记录、自动连接偏好、主动断开后的暂停策略由 App 保存和调度。此能力不包含完整后台状态恢复。
@@ -225,7 +240,9 @@ let updates = try await session.notifications(
 只要有一个活跃消费者要求 `.all`，恢复就使用全量发现。
 严格消费者加入尚未成功确认设置的兼容通道时，必须先通过属性检查并成功开启通知。
 取消消费者会移除其配置，最后一个消费者退出时才关闭底层通知。
-兼容模式仍会传播取消、断线、发现错误和超时。首次订阅使用该次调用的操作超时，恢复使用会话的连接超时。
+兼容模式仍会传播取消、断线、发现错误和超时。首次订阅使用该次调用的操作超时，恢复使用会话的连接超时；连接超时为不限时时，恢复使用默认 GATT 超时。
+恢复通知过程中如果再次断开，会使用下一次重连机会继续恢复。
+外设使服务失效（例如固件升级后）时，受影响的通知流会重新发现并重新订阅；若服务已不存在，只有相关的流以错误结束。
 
 ## 蓝牙和连接状态
 
@@ -238,6 +255,10 @@ for await state in session.connectionStates {
     print("Connection:", state)
 }
 ```
+
+每次访问 `connectionStates` 都会返回一个独立的流，并先发出当前状态，因此多个地方可以同时监听同一个会话。读取 `session.connectionState` 可获得当前状态。
+
+蓝牙关闭或重置时，进行中的扫描和待完成的连接会以错误结束，会话会报告断开。开启自动重连时，每次重连会在连接超时内等待蓝牙重新开启。
 
 所有 GATT 操作均带有超时、支持任务取消，并会在外设断开时结束尚未完成的任务。
 

@@ -169,6 +169,68 @@ final class ArcBLESampleViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testWaitIndefinitelyKeepsConnectionPendingUntilDisconnect() async throws {
+        let central = FakeCentralManager()
+        let peripheral = FakePeripheral()
+        central.retrievedPeripherals = [peripheral]
+        let defaults = MemoryDefaults(values: [
+            "ArcBLESample.savedPeripheralIdentifier": peripheral.identifier.uuidString,
+            "ArcBLESample.savedServiceUUID": "5A00"
+        ])
+        let model = ArcBLESampleViewModel(client: BLEClient(central: central), defaults: defaults)
+        XCTAssertFalse(model.waitIndefinitely)
+
+        model.waitIndefinitely = true
+        XCTAssertTrue(ArcBLESampleViewModel(client: BLEClient(central: FakeCentralManager()), defaults: defaults)
+            .waitIndefinitely, "The preference must persist")
+
+        model.reconnectSavedDevice()
+        try await waitUntil { central.connectedIdentifiers.count == 1 }
+        XCTAssertEqual(central.connectionOptions.first?.timeout, .infinity)
+        XCTAssertTrue(model.logs.contains { $0.hasSuffix("No connection timeout; tap Disconnect to cancel") })
+
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertTrue(model.isConnecting)
+        XCTAssertTrue(central.cancelledIdentifiers.isEmpty)
+
+        model.disconnect()
+        try await waitUntil { central.cancelledIdentifiers == [peripheral.identifier] }
+        XCTAssertFalse(model.isConnecting)
+    }
+
+    @MainActor
+    func testDuplicateAdvertisementsArePassedToScanAndCounted() async throws {
+        let central = FakeCentralManager()
+        let peripheral = FakePeripheral(name: "Sensor")
+        let model = ArcBLESampleViewModel(client: BLEClient(central: central), defaults: MemoryDefaults())
+        XCTAssertFalse(model.reportDuplicateAdvertisements)
+        model.reportDuplicateAdvertisements = true
+        model.serviceUUIDText = "5A00"
+
+        model.startScan()
+        try await waitUntil { central.scanForPeripheralsCallCount == 1 }
+        XCTAssertEqual(central.scanOptions, ScanOptions(allowDuplicates: true))
+
+        for rssi in [-70, -65, -60] {
+            central.discover(
+                peripheral,
+                advertisement: BLEAdvertisement(localName: "Sensor", serviceUUIDs: [], manufacturerData: nil),
+                rssi: rssi
+            )
+        }
+        try await waitUntil { model.advertisementCounts[peripheral.identifier] == 3 }
+        XCTAssertEqual(model.devices.map(\.rssi), [-60])
+
+        model.stopScan()
+        model.reportDuplicateAdvertisements = false
+        model.startScan()
+        try await waitUntil { central.scanForPeripheralsCallCount == 2 }
+        XCTAssertEqual(central.scanOptions, ScanOptions())
+        XCTAssertTrue(model.advertisementCounts.isEmpty)
+        model.stopScan()
+    }
+
+    @MainActor
     private func makeModel(central: FakeCentralManager, identifier: UUID) -> ArcBLESampleViewModel {
         ArcBLESampleViewModel(client: BLEClient(central: central), defaults: MemoryDefaults(values: [
             "ArcBLESample.savedPeripheralIdentifier": identifier.uuidString,

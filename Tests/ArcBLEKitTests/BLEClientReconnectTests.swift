@@ -257,23 +257,21 @@ final class BLEClientReconnectTests: XCTestCase {
         }
     }
 
-    func testStartingSecondConnectionCancelsFirstAndKeepsSecondActive() async throws {
+    func testStartingSecondConnectionToSamePeripheralCancelsFirstAndKeepsSecondActive() async throws {
         let central = FakeCentralManager()
-        let firstID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
-        let secondID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
-        let firstPeripheral = FakePeripheral(identifier: firstID, name: "Arc One")
-        let secondPeripheral = FakePeripheral(identifier: secondID, name: "Arc Two")
-        central.retrievedPeripherals = [firstPeripheral, secondPeripheral]
+        let id = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let peripheral = FakePeripheral(identifier: id, name: "Arc")
+        central.retrievedPeripherals = [peripheral]
         let client = BLEClient(central: central)
 
         let firstTask = Task {
-            try await client.reconnect(identifier: firstID, fallbackScan: nil, options: ConnectionOptions(timeout: 1))
+            try await client.reconnect(identifier: id, fallbackScan: nil, options: ConnectionOptions(timeout: 1))
         }
 
         await waitForConnectAttempt(on: central, count: 1)
 
         let secondTask = Task {
-            try await client.reconnect(identifier: secondID, fallbackScan: nil, options: ConnectionOptions(timeout: 1))
+            try await client.reconnect(identifier: id, fallbackScan: nil, options: ConnectionOptions(timeout: 1))
         }
 
         await waitForConnectAttempt(on: central, count: 2)
@@ -292,17 +290,130 @@ final class BLEClientReconnectTests: XCTestCase {
             XCTAssertEqual(error as? BLEError, .operationCancelled)
         }
 
-        XCTAssertEqual(central.cancelledIdentifiers, [firstID])
+        XCTAssertEqual(central.cancelledIdentifiers, [id])
         XCTAssertNotNil(central.onConnect)
         XCTAssertNotNil(central.onFailToConnect)
 
-        central.completeConnection(firstPeripheral)
-        central.completeConnection(secondPeripheral)
+        central.completeConnection(peripheral)
 
         let session = try await secondTask.value
-        XCTAssertEqual(session.device.id, secondID)
+        XCTAssertEqual(session.device.id, id)
         XCTAssertNil(central.onConnect)
         XCTAssertNil(central.onFailToConnect)
+    }
+
+    func testConnectionsToDifferentPeripheralsProceedIndependently() async throws {
+        let central = FakeCentralManager()
+        let firstID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let secondID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        let firstPeripheral = FakePeripheral(identifier: firstID, name: "Arc One")
+        let secondPeripheral = FakePeripheral(identifier: secondID, name: "Arc Two")
+        central.retrievedPeripherals = [firstPeripheral, secondPeripheral]
+        let client = BLEClient(central: central)
+
+        let firstTask = Task {
+            try await client.reconnect(identifier: firstID, fallbackScan: nil, options: ConnectionOptions(timeout: 1))
+        }
+        await waitForConnectAttempt(on: central, count: 1)
+
+        let secondTask = Task {
+            try await client.reconnect(identifier: secondID, fallbackScan: nil, options: ConnectionOptions(timeout: 1))
+        }
+        await waitForConnectAttempt(on: central, count: 2)
+
+        XCTAssertTrue(central.cancelledIdentifiers.isEmpty)
+
+        central.completeConnection(secondPeripheral)
+        let secondSession = try await secondTask.value
+        XCTAssertEqual(secondSession.device.id, secondID)
+        XCTAssertNotNil(central.onConnect, "First connection must still be pending")
+
+        central.completeConnection(firstPeripheral)
+        let firstSession = try await firstTask.value
+        XCTAssertEqual(firstSession.device.id, firstID)
+
+        XCTAssertTrue(central.cancelledIdentifiers.isEmpty)
+        XCTAssertNil(central.onConnect)
+        XCTAssertNil(central.onFailToConnect)
+    }
+
+    func testFailureOfOnePeripheralDoesNotAffectAnotherPendingConnection() async throws {
+        let central = FakeCentralManager()
+        let firstPeripheral = FakePeripheral(name: "Arc One")
+        let secondPeripheral = FakePeripheral(name: "Arc Two")
+        central.retrievedPeripherals = [firstPeripheral, secondPeripheral]
+        let client = BLEClient(central: central)
+
+        let firstTask = Task {
+            try await client.reconnect(
+                identifier: firstPeripheral.identifier, fallbackScan: nil, options: ConnectionOptions(timeout: 1)
+            )
+        }
+        await waitForConnectAttempt(on: central, count: 1)
+        let secondTask = Task {
+            try await client.reconnect(
+                identifier: secondPeripheral.identifier, fallbackScan: nil, options: ConnectionOptions(timeout: 1)
+            )
+        }
+        await waitForConnectAttempt(on: central, count: 2)
+
+        central.failConnection(firstPeripheral)
+        do {
+            _ = try await firstTask.value
+            XCTFail("Expected connectionFailed")
+        } catch {
+            XCTAssertEqual(error as? BLEError, .connectionFailed(firstPeripheral.identifier, underlying: nil))
+        }
+
+        central.completeConnection(secondPeripheral)
+        let session = try await secondTask.value
+        XCTAssertEqual(session.device.id, secondPeripheral.identifier)
+    }
+
+    func testReconnectingSamePeripheralGivesNewSessionWorkingGATTEvents() async throws {
+        let central = FakeCentralManager()
+        let peripheral = FakePeripheral(name: "Arc")
+        central.retrievedPeripherals = [peripheral]
+        let client = BLEClient(central: central)
+
+        let firstTask = Task {
+            try await client.reconnect(identifier: peripheral.identifier, fallbackScan: nil)
+        }
+        await waitForConnectAttempt(on: central, count: 1)
+        central.completeConnection(peripheral)
+        let firstSession = try await firstTask.value
+
+        let secondTask = Task {
+            try await client.reconnect(identifier: peripheral.identifier, fallbackScan: nil)
+        }
+        await waitForConnectAttempt(on: central, count: 2)
+        central.completeConnection(peripheral)
+        let secondSession = try await secondTask.value
+
+        XCTAssertFalse(firstSession === secondSession)
+        XCTAssertFalse(firstSession.isConnected)
+        XCTAssertTrue(secondSession.isConnected)
+        XCTAssertNotNil(peripheral.onEvent)
+
+        let service = FakeService(uuid: CBUUID(string: "FFF0"))
+        let characteristic = FakeCharacteristic(uuid: CBUUID(string: "FFF1"), serviceUUID: service.uuid)
+        let readTask = Task {
+            try await secondSession.read(
+                characteristic: characteristic.uuid,
+                service: service.uuid,
+                options: GATTOperationOptions(timeout: 1)
+            )
+        }
+        try await waitUntil { !peripheral.serviceDiscoveryRequests.isEmpty }
+        peripheral.completeServiceDiscovery([service])
+        try await waitUntil { !peripheral.characteristicDiscoveryRequests.isEmpty }
+        peripheral.completeCharacteristicDiscovery(service: service, characteristics: [characteristic])
+        try await waitUntil { !peripheral.readCharacteristics.isEmpty }
+        peripheral.completeRead(characteristic: characteristic, data: Data([0x2A]))
+
+        let value = try await readTask.value
+        XCTAssertEqual(value, Data([0x2A]))
+        await secondSession.disconnect()
     }
 
     func testRetrievedConnectionFailureCanFallBackWithoutLosingBridgeOption() async throws {
@@ -374,6 +485,22 @@ final class BLEClientReconnectTests: XCTestCase {
 
     private func waitForScanStart(on central: FakeCentralManager) async {
         while central.scanForPeripheralsCallCount == 0 {
+            await Task.yield()
+        }
+    }
+
+    private func waitUntil(
+        timeoutNanoseconds: UInt64 = 1_000_000_000,
+        _ condition: () -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+        while !condition() {
+            if DispatchTime.now().uptimeNanoseconds > deadline {
+                XCTFail("Timed out waiting for condition", file: file, line: line)
+                throw CancellationError()
+            }
             await Task.yield()
         }
     }

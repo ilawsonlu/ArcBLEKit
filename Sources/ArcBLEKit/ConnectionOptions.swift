@@ -3,6 +3,11 @@ import Foundation
 /// Timeout and recovery behavior for a peripheral connection.
 public struct ConnectionOptions: Equatable, Sendable {
     /// The maximum connection duration; `reconnect` shares this budget across retrieval, scan, and connection.
+    ///
+    /// Pass `.infinity` to keep a pending CoreBluetooth connection until the peripheral comes into
+    /// range or the task is cancelled. Automatic reconnect then also waits indefinitely for each
+    /// attempt, and notification restoration uses the default GATT timeout. Zero, negative, and
+    /// NaN values fail immediately with ``BLEError/connectionTimedOut(_:)``.
     public var timeout: TimeInterval
     /// The policy applied after an unexpected disconnect.
     public var autoReconnect: AutoReconnectPolicy

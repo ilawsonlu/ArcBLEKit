@@ -14,7 +14,7 @@ protocol CentralManaging: AnyObject, Sendable {
     var onConnectionEvent: ((ConnectionEvent.Kind, PeripheralRepresenting) -> Void)? { get set }
     var onDisconnect: ((PeripheralRepresenting, Error?) -> Void)? { get set }
 
-    func scanForPeripherals(withServices services: [CBUUID]?)
+    func scanForPeripherals(withServices services: [CBUUID]?, options: ScanOptions)
     func registerForConnectionEvents(matching filter: ConnectionEventFilter?)
     func stopScan()
     func retrievePeripherals(withIdentifiers identifiers: [UUID]) -> [PeripheralRepresenting]

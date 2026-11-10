@@ -9,6 +9,8 @@ This iOS sample app is a real-device debugging companion for ArcBLEKit. It cover
 - opt into foreground automatic recovery, reusing a system-connected peer before identifier retrieval and scanning
 - observe system peer connection events for the saved device
 - request classic audio bridging on compatible CTKD accessories
+- wait indefinitely for a device to come into range, with no connection timeout
+- report duplicate advertisements to follow RSSI and broadcast data, with a per-device advertisement count
 - read and write configurable characteristics with hex payloads
 - choose write with response or without response
 - subscribe to notifications and inspect received bytes
@@ -46,10 +48,12 @@ The project references the root `ArcBLEKit` package locally, so keep the sample 
 10. Power-cycle the peripheral to observe automatic reconnect.
 11. Enable **Auto-connect Saved Device**, then leave and reopen the app to exercise foreground recovery. The service UUID and preferences are saved along with the identifier.
 12. On compatible dual-mode hardware, enable **Connect Audio Too** before the next connection and check the system audio route separately.
+13. Enable **Wait Indefinitely**, power off the peripheral, and tap **Reconnect Saved Device**. The request stays pending with no timeout until the peripheral powers on; **Disconnect** cancels it. Automatic reconnect attempts also wait without a timeout.
+14. Enable **Report Duplicate Advertisements** before scanning to update RSSI and broadcast data on every advertisement. Each row shows how many advertisements arrived during the scan. iOS ignores this option in the background.
 
 ## Automatic Connection Behavior
 
-Automatic connection and audio bridging both default to off. When enabled, foreground recovery first queries system-connected peripherals for the configured service and chooses only the saved identifier. Otherwise, it retrieves that identifier and falls back to scanning, including recovery after a failed retrieved connection.
+Automatic connection, audio bridging, indefinite waiting, and duplicate advertisements all default to off. When enabled, foreground recovery first queries system-connected peripherals for the configured service and chooses only the saved identifier. Otherwise, it retrieves that identifier and falls back to scanning, including recovery after a failed retrieved connection.
 
 Startup, system peer events, and manual requests share one connection task. **Disconnect** cancels a pending request and pauses automatic connection for the current app run, including subsequent Bluetooth power cycles or foreground transitions. **Reconnect Saved Device**, a manual device connection, or turning automatic connection off and on resumes it. Starting a manual scan also pauses automatic connection so it does not interrupt device selection.
 
