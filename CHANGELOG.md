@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.6
+
 - End active scans, pending connections, and sessions when Bluetooth turns off or resets; CoreBluetooth reports no individual disconnects then. Automatic reconnect waits for Bluetooth to power back on within the connection timeout and retrieves the peripheral again.
 - `PeripheralSession.connectionStates` now returns an independent stream per access that starts with the current state, so several consumers can observe one session. Add `PeripheralSession.connectionState`. Consumers no longer receive the earlier `.connected` replay before `.ready`.
 - Fix a crash when CoreBluetooth reports a characteristic whose service was already released.
