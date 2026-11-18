@@ -98,7 +98,7 @@ final class ReconnectRestorationRetryTests: XCTestCase {
         central.completeConnection(peripheral)
         let session = try await connectTask.value
 
-        let streamTask = Task {
+        let streamTask = Task { [service] in
             try await session.notifications(for: characteristic.uuid, service: service.uuid)
         }
         try await waitUntil { peripheral.serviceDiscoveryRequests.count == 1 }

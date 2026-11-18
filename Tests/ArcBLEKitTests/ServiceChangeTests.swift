@@ -15,7 +15,7 @@ final class ServiceChangeTests: XCTestCase {
         let characteristic = FakeCharacteristic(uuid: CBUUID(string: "FFF1"), serviceUUID: service.uuid)
         cache(characteristic, in: session)
 
-        let readTask = Task {
+        let readTask = Task { [service] in
             try await session.read(
                 characteristic: characteristic.uuid, service: service.uuid, options: GATTOperationOptions(timeout: 2)
             )
