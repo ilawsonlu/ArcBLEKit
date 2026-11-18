@@ -18,6 +18,14 @@ final class ArcBLESampleViewModel: ObservableObject {
     @Published var enableTransportBridging = false {
         didSet { defaults.set(enableTransportBridging, forKey: Self.bridgingKey) }
     }
+    /// Keeps a pending connection without a timeout until the device appears or Disconnect cancels it.
+    @Published var waitIndefinitely = false {
+        didSet { defaults.set(waitIndefinitely, forKey: Self.waitIndefinitelyKey) }
+    }
+    /// Reports every advertisement so RSSI and broadcast data keep updating while scanning.
+    @Published var reportDuplicateAdvertisements = false {
+        didSet { defaults.set(reportDuplicateAdvertisements, forKey: Self.duplicatesKey) }
+    }
     @Published var autoConnectSavedDevice = false {
         didSet {
             defaults.set(autoConnectSavedDevice, forKey: Self.autoConnectKey)
@@ -26,6 +34,8 @@ final class ArcBLESampleViewModel: ObservableObject {
     }
     @Published private(set) var isConnecting = false
     @Published private(set) var devices: [BLEDevice] = []
+    /// Advertisements received per device during the current scan.
+    @Published private(set) var advertisementCounts: [UUID: Int] = [:]
     @Published private(set) var isScanning = false
     @Published private(set) var isSubscribed = false
     @Published private(set) var connectedDeviceID: UUID?
@@ -39,6 +49,8 @@ final class ArcBLESampleViewModel: ObservableObject {
     private let defaults: UserDefaults
     private static let autoConnectKey = "ArcBLESample.autoConnectSavedDevice"
     private static let bridgingKey = "ArcBLESample.enableTransportBridging"
+    private static let waitIndefinitelyKey = "ArcBLESample.waitIndefinitely"
+    private static let duplicatesKey = "ArcBLESample.reportDuplicateAdvertisements"
     private static let savedServiceKey = "ArcBLESample.savedServiceUUID"
     private var connectionTask: Task<Void, Never>?
     private var connectionCleanupTask: Task<Void, Never>?
@@ -59,6 +71,8 @@ final class ArcBLESampleViewModel: ObservableObject {
         self.defaults = defaults
         autoConnectSavedDevice = defaults.bool(forKey: Self.autoConnectKey)
         enableTransportBridging = defaults.bool(forKey: Self.bridgingKey)
+        waitIndefinitely = defaults.bool(forKey: Self.waitIndefinitelyKey)
+        reportDuplicateAdvertisements = defaults.bool(forKey: Self.duplicatesKey)
         if let service = defaults.string(forKey: Self.savedServiceKey) {
             serviceUUIDText = service
         }
@@ -85,16 +99,21 @@ final class ArcBLESampleViewModel: ObservableObject {
         }
 
         devices.removeAll()
+        advertisementCounts.removeAll()
         isScanning = true
         statusText = "Scanning"
-        appendLog("Scanning for service \(serviceUUID.uuidString)")
+        let scanOptions = ScanOptions(allowDuplicates: reportDuplicateAdvertisements)
+        appendLog(
+            "Scanning for service \(serviceUUID.uuidString)"
+                + (scanOptions.allowDuplicates ? " (duplicates on)" : "")
+        )
 
         let filter = ScanFilter(serviceUUIDs: [serviceUUID])
         scanTask = Task { [weak self] in
             guard let self else { return }
             do {
                 try await client.waitUntilReady(timeout: 10)
-                for try await device in client.scan(filter: filter) {
+                for try await device in client.scan(filter: filter, options: scanOptions) {
                     self.recordDiscoveredDevice(device)
                 }
                 self.finishScanIfNeeded(message: "Scan stopped")
@@ -180,6 +199,9 @@ final class ArcBLESampleViewModel: ObservableObject {
         isConnecting = true
         statusText = automatic ? "Restoring saved device" : "Connecting"
         appendLog(message)
+        if waitIndefinitely {
+            appendLog("No connection timeout; tap Disconnect to cancel")
+        }
         connectionTask = Task { [weak self] in
             await previousCleanup?.value
             await previousSession?.disconnect()
@@ -418,6 +440,7 @@ final class ArcBLESampleViewModel: ObservableObject {
     }
 
     private func recordDiscoveredDevice(_ device: BLEDevice) {
+        advertisementCounts[device.id, default: 0] += 1
         if let index = devices.firstIndex(where: { $0.id == device.id }) {
             devices[index] = device
         } else {
@@ -511,7 +534,7 @@ final class ArcBLESampleViewModel: ObservableObject {
 
     private var sampleConnectionOptions: ConnectionOptions {
         ConnectionOptions(
-            timeout: 10,
+            timeout: waitIndefinitely ? .infinity : 10,
             autoReconnect: .limited(maxAttempts: 3, delay: 1),
             enableTransportBridging: enableTransportBridging
         )

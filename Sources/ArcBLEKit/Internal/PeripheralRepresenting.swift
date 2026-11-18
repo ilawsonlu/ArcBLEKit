@@ -16,6 +16,8 @@ enum PeripheralEvent: @unchecked Sendable {
     case valueWritten(CharacteristicRepresenting, Error?)
     case notificationStateUpdated(CharacteristicRepresenting, Error?)
     case readyToWriteWithoutResponse
+    /// The peripheral invalidated these services, for example after a firmware update.
+    case servicesModified([ServiceRepresenting])
 }
 
 protocol ServiceRepresenting: AnyObject, Sendable {
@@ -24,7 +26,8 @@ protocol ServiceRepresenting: AnyObject, Sendable {
 
 protocol CharacteristicRepresenting: AnyObject, Sendable {
     var uuid: CBUUID { get }
-    var serviceUUID: CBUUID { get }
+    /// The containing service, or `nil` when CoreBluetooth already released it.
+    var serviceUUID: CBUUID? { get }
     var properties: CBCharacteristicProperties { get }
     var isNotifying: Bool { get }
 }

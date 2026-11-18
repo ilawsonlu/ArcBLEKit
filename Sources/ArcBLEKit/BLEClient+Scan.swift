@@ -59,9 +59,28 @@ public extension BLEClient {
     ///
     /// - Parameter filter: Service, identifier, name, and manufacturer-data constraints.
     /// - Returns: A stream of matching advertisement snapshots.
-    /// - Throws: ``BLEError`` when Bluetooth is unavailable while scanning.
+    /// - Throws: ``BLEError`` when Bluetooth is unavailable when scanning starts or becomes
+    ///   unavailable while scanning.
     func scan(
         filter: ScanFilter
+    ) -> AsyncThrowingStream<BLEDevice, Error> {
+        scan(filter: filter, options: ScanOptions())
+    }
+
+    /// Scans for peripherals matching a filter with explicit CoreBluetooth scan options.
+    ///
+    /// Use ``ScanOptions/allowDuplicates`` to receive repeated advertisements from the same
+    /// peripheral, for example to follow RSSI or broadcast sensor data.
+    ///
+    /// - Parameters:
+    ///   - filter: Service, identifier, name, and manufacturer-data constraints.
+    ///   - options: Duplicate reporting and solicited services.
+    /// - Returns: A stream of matching advertisement snapshots.
+    /// - Throws: ``BLEError`` when Bluetooth is unavailable when scanning starts or becomes
+    ///   unavailable while scanning.
+    func scan(
+        filter: ScanFilter,
+        options: ScanOptions
     ) -> AsyncThrowingStream<BLEDevice, Error> {
         AsyncThrowingStream { continuation in
             let scanID = UUID()
@@ -73,7 +92,7 @@ public extension BLEClient {
                 return
             }
 
-            startScan(id: scanID, filter: filter, continuation: continuation)
+            startScan(id: scanID, filter: filter, options: options, continuation: continuation)
 
             continuation.onTermination = { [weak self] _ in
                 guard let self else { return }
@@ -85,7 +104,8 @@ public extension BLEClient {
     /// Returns the first peripheral matching a filter.
     /// - Parameters:
     ///   - filter: Constraints applied to advertisements.
-    ///   - timeout: The maximum number of seconds to wait for a match.
+    ///   - timeout: The maximum number of seconds to wait for a match. Pass `.infinity` to scan
+    ///     until a match is found or the task is cancelled.
     /// - Returns: The first matching device.
     /// - Throws: ``BLEError/scanTimedOut``, ``BLEError/operationCancelled``, or a Bluetooth state error.
     func findDevice(
@@ -93,7 +113,8 @@ public extension BLEClient {
         timeout: TimeInterval
     ) async throws -> BLEDevice {
         try validateBluetoothReady()
-        guard let timeoutNanoseconds = timeoutNanoseconds(timeout) else {
+        let timeoutNanoseconds = timeoutNanoseconds(timeout)
+        guard timeoutNanoseconds != nil || Self.isUnlimited(timeout) else {
             throw BLEError.scanTimedOut
         }
 
@@ -132,18 +153,20 @@ public extension BLEClient {
                 }
                 attempt.installScanTask(scanTask)
 
-                let timeoutTask = Task {
-                    do {
-                        try await Task.sleep(nanoseconds: timeoutNanoseconds)
-                    } catch {
-                        return
+                if let timeoutNanoseconds {
+                    let timeoutTask = Task {
+                        do {
+                            try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                        } catch {
+                            return
+                        }
+                        attempt.finish {
+                            self.finishScan(id: scanID)
+                            continuation.resume(throwing: BLEError.scanTimedOut)
+                        }
                     }
-                    attempt.finish {
-                        self.finishScan(id: scanID)
-                        continuation.resume(throwing: BLEError.scanTimedOut)
-                    }
+                    attempt.installTimeoutTask(timeoutTask)
                 }
-                attempt.installTimeoutTask(timeoutTask)
 
                 cancellation.set {
                     attempt.finish {

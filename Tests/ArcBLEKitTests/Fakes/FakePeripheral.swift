@@ -16,7 +16,7 @@ final class FakeService: ServiceRepresenting, @unchecked Sendable {
 
 final class FakeCharacteristic: CharacteristicRepresenting, @unchecked Sendable {
     let uuid: CBUUID
-    let serviceUUID: CBUUID
+    @TestLocked var serviceUUID: CBUUID?
     let properties: CBCharacteristicProperties
     @TestLocked var isNotifying: Bool
 
@@ -133,6 +133,10 @@ final class FakePeripheral: PeripheralRepresenting, @unchecked Sendable {
 
     func emitNotification(characteristic: CharacteristicRepresenting, data: Data) {
         onEvent?(.valueUpdated(characteristic, data, nil))
+    }
+
+    func modifyServices(_ invalidatedServices: [ServiceRepresenting]) {
+        onEvent?(.servicesModified(invalidatedServices))
     }
 
     func becomeReadyToWriteWithoutResponse() {

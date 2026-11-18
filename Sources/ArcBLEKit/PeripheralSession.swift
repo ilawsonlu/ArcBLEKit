@@ -28,9 +28,42 @@ public final class PeripheralSession: @unchecked Sendable {
     private var reconnectInProgress = false
     private var reconnectTask: Task<Void, Never>?
 
-    private let stateContinuation: AsyncStream<ConnectionState>.Continuation
+    private let stateLock = NSLock()
+    private var currentState: ConnectionState = .connected
+    private var stateSubscribers: [UUID: AsyncStream<ConnectionState>.Continuation] = [:]
+    private var stateStreamFinished = false
+
+    /// The session's latest lifecycle state.
+    public var connectionState: ConnectionState {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return currentState
+    }
+
     /// Connection and automatic reconnect lifecycle events.
-    public let connectionStates: AsyncStream<ConnectionState>
+    ///
+    /// Each access returns an independent stream, so any number of consumers can observe the
+    /// session. A stream first yields the current state, then every later change, and finishes
+    /// when the session ends. Accessing it after the session ended yields the final state and
+    /// finishes immediately.
+    public var connectionStates: AsyncStream<ConnectionState> {
+        AsyncStream { continuation in
+            let id = UUID()
+            continuation.onTermination = { [weak self] _ in
+                self?.removeStateSubscriber(id: id)
+            }
+
+            stateLock.lock()
+            continuation.yield(currentState)
+            guard !stateStreamFinished else {
+                stateLock.unlock()
+                continuation.finish()
+                return
+            }
+            stateSubscribers[id] = continuation
+            stateLock.unlock()
+        }
+    }
 
     var isConnected: Bool {
         lifecycleLock.lock()
@@ -53,10 +86,6 @@ public final class PeripheralSession: @unchecked Sendable {
         self.reconnectAction = reconnectAction
         self.onTermination = onTermination
 
-        var continuation: AsyncStream<ConnectionState>.Continuation!
-        self.connectionStates = AsyncStream { continuation = $0 }
-        self.stateContinuation = continuation
-
         self.peripheral.onEvent = { [weak self] event in
             self?.handlePeripheralEvent(event)
         }
@@ -65,7 +94,34 @@ public final class PeripheralSession: @unchecked Sendable {
     }
 
     func emit(_ state: ConnectionState) {
-        stateContinuation.yield(state)
+        // Yield while holding the lock so every subscriber observes changes in the same order.
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard !stateStreamFinished else {
+            return
+        }
+        currentState = state
+        for continuation in stateSubscribers.values {
+            continuation.yield(state)
+        }
+    }
+
+    private func finishStateStreams() {
+        stateLock.lock()
+        stateStreamFinished = true
+        let continuations = Array(stateSubscribers.values)
+        stateSubscribers.removeAll()
+        stateLock.unlock()
+
+        for continuation in continuations {
+            continuation.finish()
+        }
+    }
+
+    private func removeStateSubscriber(id: UUID) {
+        stateLock.lock()
+        stateSubscribers[id] = nil
+        stateLock.unlock()
     }
 
     func ensureConnected() throws {
@@ -143,7 +199,7 @@ public final class PeripheralSession: @unchecked Sendable {
         peripheral.onEvent = nil
         central.cancelPeripheralConnection(peripheral)
         emit(.disconnected)
-        stateContinuation.finish()
+        finishStateStreams()
         onTermination(self)
     }
 
@@ -163,8 +219,12 @@ public final class PeripheralSession: @unchecked Sendable {
         return task ?? Task {}
     }
 
+    /// Ends a session replaced by a newer session for the same peripheral.
+    ///
+    /// The peripheral object is shared with the replacement, which has already installed its own
+    /// event handler, so the handler must be left in place.
     func invalidate() {
-        finishSession(throwing: BLEError.operationCancelled)
+        finishSession(throwing: BLEError.operationCancelled, releasePeripheralEvents: false)
     }
 
     private func runReconnect(
@@ -208,15 +268,18 @@ public final class PeripheralSession: @unchecked Sendable {
                 if !notificationRegistry.activeIDs().isEmpty {
                     do {
                         try await restoreNotifications(
-                            options: GATTOperationOptions(
-                                timeout: options.timeout
-                            )
+                            options: restorationOptions
                         )
                     } catch {
                         guard shouldContinueReconnecting else {
                             return
                         }
                         let bleError = mapToBLEError(error)
+                        // The link dropped again mid-restoration: spend a remaining attempt
+                        // instead of ending the session.
+                        if !isConnected, case .disconnected = bleError {
+                            throw bleError
+                        }
                         emit(.failed(bleError))
                         central.cancelPeripheralConnection(peripheral)
                         finishSession(throwing: bleError)
@@ -247,6 +310,11 @@ public final class PeripheralSession: @unchecked Sendable {
 
         emit(.failed(lastError))
         finishSession(throwing: lastError)
+    }
+
+    /// GATT timeouts must be finite, so an unlimited connection timeout falls back to the default.
+    private var restorationOptions: GATTOperationOptions {
+        options.timeout.isFinite ? GATTOperationOptions(timeout: options.timeout) : GATTOperationOptions()
     }
 
     private var shouldContinueReconnecting: Bool {
@@ -281,7 +349,7 @@ public final class PeripheralSession: @unchecked Sendable {
         lifecycleLock.unlock()
     }
 
-    private func finishSession(throwing error: BLEError) {
+    private func finishSession(throwing error: BLEError, releasePeripheralEvents: Bool = true) {
         lifecycleLock.lock()
         guard !terminated else {
             lifecycleLock.unlock()
@@ -303,8 +371,10 @@ public final class PeripheralSession: @unchecked Sendable {
         }
         notificationRegistry.finishAll(throwing: error)
         characteristicCache.clear()
-        peripheral.onEvent = nil
-        stateContinuation.finish()
+        if releasePeripheralEvents {
+            peripheral.onEvent = nil
+        }
+        finishStateStreams()
         onTermination(self)
     }
 

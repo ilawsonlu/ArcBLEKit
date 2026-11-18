@@ -230,10 +230,7 @@ extension PeripheralSession {
             )
 
         case let .valueUpdated(characteristic, data, error):
-            let id = GATTCharacteristicID(
-                serviceUUID: characteristic.serviceUUID,
-                characteristicUUID: characteristic.uuid
-            )
+            guard let id = Self.attributeID(of: characteristic) else { return }
             let completedRead = operationCoordinator.resolve(
                 key: .read(id),
                 event: event
@@ -255,17 +252,11 @@ extension PeripheralSession {
             }
 
         case let .valueWritten(characteristic, _):
-            let id = GATTCharacteristicID(
-                serviceUUID: characteristic.serviceUUID,
-                characteristicUUID: characteristic.uuid
-            )
+            guard let id = Self.attributeID(of: characteristic) else { return }
             operationCoordinator.resolve(key: .write(id), event: event)
 
         case let .notificationStateUpdated(characteristic, _):
-            let id = GATTCharacteristicID(
-                serviceUUID: characteristic.serviceUUID,
-                characteristicUUID: characteristic.uuid
-            )
+            guard let id = Self.attributeID(of: characteristic) else { return }
             operationCoordinator.resolve(
                 key: .notificationSetup(id),
                 event: event
@@ -276,11 +267,54 @@ extension PeripheralSession {
                 key: .writeWithoutResponseReady,
                 event: event
             )
+
+        case let .servicesModified(invalidatedServices):
+            handleServicesModified(Set(invalidatedServices.map(\.uuid)))
         }
     }
 
-    func restoreNotifications(options: GATTOperationOptions) async throws {
-        for scheduled in notificationRegistry.snapshots() {
+    /// Events for a characteristic whose service CoreBluetooth already released cannot be routed.
+    private static func attributeID(of characteristic: CharacteristicRepresenting) -> GATTCharacteristicID? {
+        guard let serviceUUID = characteristic.serviceUUID else { return nil }
+        return GATTCharacteristicID(serviceUUID: serviceUUID, characteristicUUID: characteristic.uuid)
+    }
+
+    /// Drops cached attributes for invalidated services and re-subscribes affected streams.
+    ///
+    /// CoreBluetooth stops delivering notifications for characteristics of invalidated services.
+    /// Each affected stream is restored through fresh discovery; if the service is gone or setup
+    /// fails, only those streams finish with the error while the session stays connected.
+    private func handleServicesModified(_ serviceUUIDs: Set<CBUUID>) {
+        guard !serviceUUIDs.isEmpty else { return }
+        characteristicCache.remove(serviceUUIDs: serviceUUIDs)
+
+        let affected = Set(notificationRegistry.activeIDs().filter { serviceUUIDs.contains($0.serviceUUID) })
+        guard !affected.isEmpty else { return }
+        notificationRegistry.invalidateSetups(for: affected)
+
+        Task { [weak self] in
+            for id in affected {
+                guard let self, self.isConnected else { return }
+                do {
+                    try await self.restoreNotifications(options: GATTOperationOptions(), only: [id])
+                } catch {
+                    // A disconnect hands restoration to the reconnect policy instead.
+                    guard self.isConnected else { return }
+                    let streamError = (error as? BLEError) ?? .notificationSetupFailed(
+                        id.characteristicUUID,
+                        underlying: String(describing: error)
+                    )
+                    self.notificationRegistry.finish(id: id, throwing: streamError)
+                }
+            }
+        }
+    }
+
+    func restoreNotifications(
+        options: GATTOperationOptions,
+        only ids: Set<GATTCharacteristicID>? = nil
+    ) async throws {
+        for scheduled in notificationRegistry.snapshots() where ids?.contains(scheduled.id) ?? true {
             try await operationQueue.run {
                 while let snapshot = self.notificationRegistry.snapshot(for: scheduled.id),
                       snapshot.generation == scheduled.generation {

@@ -89,7 +89,7 @@ public extension BLEClient {
     ) async throws -> PeripheralSession {
         try validateBluetoothReady()
         if Task.isCancelled { throw BLEError.operationCancelled }
-        guard timeoutNanoseconds(options.timeout) != nil else {
+        guard timeoutNanoseconds(options.timeout) != nil || Self.isUnlimited(options.timeout) else {
             throw BLEError.connectionTimedOut(identifier)
         }
         let startedAt = ProcessInfo.processInfo.systemUptime
@@ -155,6 +155,10 @@ public extension BLEClient {
                 guard let self else {
                     throw BLEError.bluetoothUnavailable
                 }
+                // Survive a Bluetooth power cycle: wait for power, then retrieve the peripheral
+                // again so CoreBluetooth hands out a valid object for the shared peripheral box.
+                try await self.waitForPoweredOn(timeout: options.timeout)
+                _ = self.central.retrievePeripherals(withIdentifiers: [connectedPeripheral.identifier])
                 return try await self.establishConnection(
                     peripheral: connectedPeripheral,
                     options: options
@@ -173,7 +177,10 @@ public extension BLEClient {
         options: ConnectionOptions
     ) async throws -> PeripheralRepresenting {
         try validateBluetoothReady()
-        guard let timeoutNanoseconds = timeoutNanoseconds(options.timeout) else {
+        // An unlimited timeout leaves a pending CoreBluetooth connection until it completes,
+        // fails, or the task is cancelled.
+        let timeoutNanoseconds = timeoutNanoseconds(options.timeout)
+        guard timeoutNanoseconds != nil || Self.isUnlimited(options.timeout) else {
             throw BLEError.connectionTimedOut(peripheral.identifier)
         }
 
@@ -185,16 +192,28 @@ public extension BLEClient {
             try await withCheckedThrowingContinuation { continuation in
                 let cancelConnection: @Sendable () -> Void = {
                     attempt.finish {
-                        _ = self.finishConnection(id: connectionID)
+                        _ = self.finishConnection(id: connectionID, peripheralID: peripheral.identifier)
                         self.central.cancelPeripheralConnection(peripheral)
                         continuation.resume(throwing: BLEError.operationCancelled)
                     }
                 }
 
-                startConnection(id: connectionID, peripheral: peripheral, options: options, onSuperseded: cancelConnection) { connectedPeripheral in
+                let failConnection: @Sendable (BLEError) -> Void = { error in
+                    attempt.finish {
+                        continuation.resume(throwing: error)
+                    }
+                }
+
+                startConnection(
+                    id: connectionID,
+                    peripheral: peripheral,
+                    options: options,
+                    onSuperseded: cancelConnection,
+                    onBluetoothUnavailable: failConnection
+                ) { connectedPeripheral in
                     guard connectedPeripheral.identifier == peripheral.identifier else { return }
                     attempt.finish {
-                        guard self.finishConnection(id: connectionID) else {
+                        guard self.finishConnection(id: connectionID, peripheralID: peripheral.identifier) else {
                             self.central.cancelPeripheralConnection(connectedPeripheral)
                             continuation.resume(throwing: BLEError.operationCancelled)
                             return
@@ -204,7 +223,7 @@ public extension BLEClient {
                 } onFailToConnect: { failedPeripheral, error in
                     guard failedPeripheral.identifier == peripheral.identifier else { return }
                     attempt.finish {
-                        guard self.finishConnection(id: connectionID) else {
+                        guard self.finishConnection(id: connectionID, peripheralID: peripheral.identifier) else {
                             continuation.resume(throwing: BLEError.operationCancelled)
                             return
                         }
@@ -217,23 +236,25 @@ public extension BLEClient {
                     }
                 }
 
-                let timeoutTask = Task {
-                    do {
-                        try await Task.sleep(nanoseconds: timeoutNanoseconds)
-                    } catch {
-                        return
+                if let timeoutNanoseconds {
+                    let timeoutTask = Task {
+                        do {
+                            try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                        } catch {
+                            return
+                        }
+                        attempt.finish {
+                            let ownsConnection = self.finishConnection(id: connectionID, peripheralID: peripheral.identifier)
+                            self.central.cancelPeripheralConnection(peripheral)
+                            continuation.resume(
+                                throwing: ownsConnection
+                                    ? BLEError.connectionTimedOut(peripheral.identifier)
+                                    : BLEError.operationCancelled
+                            )
+                        }
                     }
-                    attempt.finish {
-                        let ownsConnection = self.finishConnection(id: connectionID)
-                        self.central.cancelPeripheralConnection(peripheral)
-                        continuation.resume(
-                            throwing: ownsConnection
-                                ? BLEError.connectionTimedOut(peripheral.identifier)
-                                : BLEError.operationCancelled
-                        )
-                    }
+                    attempt.installTimeoutTask(timeoutTask)
                 }
-                attempt.installTimeoutTask(timeoutTask)
                 cancellation.set(cancelConnection)
             }
         } onCancel: {

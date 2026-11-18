@@ -16,7 +16,13 @@ let session = try await client.connect(
 )
 ```
 
-Observe `session.connectionStates` to keep the UI synchronized with reconnect attempts. Calling `disconnect()` is a deliberate user action and does not start automatic reconnect.
+Observe ``PeripheralSession/connectionStates`` to keep the UI synchronized with reconnect attempts. Each access returns an independent stream that starts with the current state, so several consumers can observe the same session; ``PeripheralSession/connectionState`` returns a snapshot. Calling `disconnect()` is a deliberate user action and does not start automatic reconnect.
+
+To wait for a peripheral to come back into range without a deadline, pass `.infinity` as ``ConnectionOptions/timeout``. The pending connection lasts until it completes or the task is cancelled. Connections to different peripherals proceed independently; only a newer attempt for the same peripheral supersedes an older one.
+
+## Bluetooth power changes
+
+CoreBluetooth invalidates every peripheral when Bluetooth turns off or resets, without reporting individual disconnects. ArcBLEKit fails active scans and pending connections with the matching ``BLEError`` and reports a disconnect on every session. With automatic reconnect enabled, each attempt waits up to the connection timeout for Bluetooth to power back on, then retrieves the peripheral again before connecting. An unauthorized or unsupported state ends the attempt.
 
 ## Restore a saved peripheral
 
@@ -51,7 +57,9 @@ Persisting devices, selecting a preferred peer, avoiding duplicate connection ta
 
 Pending reads, writes, discovery, and notification setup fail when the peripheral disconnects. Run a new operation after the session reports `.ready` again rather than retrying an old continuation.
 
-Active notification streams are restored after a successful automatic reconnect. Consumers can continue iterating the same stream unless restoration fails, in which case the stream finishes with an error.
+Active notification streams are restored after a successful automatic reconnect. Consumers can continue iterating the same stream unless restoration fails, in which case the stream finishes with an error. If the link drops again during restoration, the next reconnect attempt is used.
+
+When a peripheral invalidates services, for example after a firmware update, the session discards cached attributes for those services and re-subscribes affected notification streams through fresh discovery. If a service no longer exists, only its streams finish with an error; the session stays connected.
 
 ## Compatibility modes
 
@@ -82,4 +90,5 @@ streams after reconnecting. For consumers sharing a service and characteristic:
 
 Compatibility does not ignore cancellation, disconnection, discovery errors, or timeouts. Initial
 setup uses that invocation's ``GATTOperationOptions``; restoration uses the session's
-``ConnectionOptions/timeout``. A restoration failure still ends the session and its active streams.
+``ConnectionOptions/timeout``, or the default GATT timeout when the connection timeout is unlimited.
+A restoration failure other than another disconnect ends the session and its active streams.

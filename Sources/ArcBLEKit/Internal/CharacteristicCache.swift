@@ -45,6 +45,18 @@ final class CharacteristicCache {
         }
     }
 
+    func remove(serviceUUIDs: Set<CBUUID>) {
+        lock.lock()
+        defer { lock.unlock() }
+        for uuid in serviceUUIDs {
+            servicesByUUID[uuid] = nil
+        }
+        let prefixes = serviceUUIDs.map { "\($0.uuidString)::" }
+        characteristicsByServiceAndUUID = characteristicsByServiceAndUUID.filter { key, _ in
+            !prefixes.contains { key.hasPrefix($0) }
+        }
+    }
+
     func clear() {
         lock.lock()
         servicesByUUID.removeAll()

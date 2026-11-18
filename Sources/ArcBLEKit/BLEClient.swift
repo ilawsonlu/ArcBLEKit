@@ -8,6 +8,9 @@ public final class BLEClient: @unchecked Sendable {
     private struct ActiveConnection {
         let id: UUID
         let cancel: @Sendable () -> Void
+        let fail: @Sendable (BLEError) -> Void
+        let onConnect: @Sendable (PeripheralRepresenting) -> Void
+        let onFailToConnect: @Sendable (PeripheralRepresenting, Error?) -> Void
     }
 
     /// Options used to create the underlying CoreBluetooth central manager.
@@ -40,7 +43,9 @@ public final class BLEClient: @unchecked Sendable {
     private var sessionsByIdentifier: [UUID: PeripheralSession] = [:]
     private var activeScanID: UUID?
     private var activeScanContinuation: AsyncThrowingStream<BLEDevice, Error>.Continuation?
-    private var activeConnection: ActiveConnection?
+    /// Pending connection attempts keyed by peripheral identifier. Each peripheral has at most one
+    /// attempt; attempts for different peripherals proceed independently.
+    private var activeConnections: [UUID: ActiveConnection] = [:]
     private var stateContinuations: [
         UUID: AsyncStream<BluetoothState>.Continuation
     ] = [:]
@@ -75,6 +80,7 @@ public final class BLEClient: @unchecked Sendable {
         self.central = central
         self.central.onStateChange = { [weak self] state in
             self?.refreshConnectionEventRegistration(state: state)
+            self?.handleBluetoothStateChange(state)
             self?.publishBluetoothState(state)
         }
         self.central.onConnectionEvent = { [weak self] kind, peripheral in
@@ -128,23 +134,128 @@ public final class BLEClient: @unchecked Sendable {
     }
 
     func validateBluetoothReady() throws {
-        switch central.state {
-        case .poweredOn:
-            return
-        case .unauthorized:
-            throw BLEError.bluetoothUnauthorized
-        case .unsupported:
-            throw BLEError.bluetoothUnavailable
-        case .poweredOff:
-            throw BLEError.bluetoothPoweredOff
-        case .unknown, .resetting:
-            throw BLEError.bluetoothUnavailable
+        if let error = Self.unavailableError(for: central.state) {
+            throw error
         }
+    }
+
+    static func unavailableError(for state: BluetoothState) -> BLEError? {
+        switch state {
+        case .poweredOn:
+            return nil
+        case .unauthorized:
+            return .bluetoothUnauthorized
+        case .poweredOff:
+            return .bluetoothPoweredOff
+        case .unsupported, .unknown, .resetting:
+            return .bluetoothUnavailable
+        }
+    }
+
+    /// CoreBluetooth invalidates every peripheral when the central leaves `.poweredOn` without
+    /// reporting individual disconnects, so end scans, pending connections, and sessions here.
+    private func handleBluetoothStateChange(_ state: BluetoothState) {
+        guard let error = Self.unavailableError(for: state) else {
+            return
+        }
+
+        failActiveScan(with: error)
+        failPendingConnections(with: error)
+
+        lock.lock()
+        let sessions = Array(sessionsByIdentifier.values)
+        lock.unlock()
+        for session in sessions {
+            session.handleDisconnect(error: error)
+        }
+    }
+
+    private func failActiveScan(with error: BLEError) {
+        scanLock.lock()
+        let continuation = activeScanContinuation
+        if continuation != nil {
+            activeScanID = nil
+            activeScanContinuation = nil
+            central.onDiscover = nil
+        }
+        scanLock.unlock()
+
+        continuation?.finish(throwing: error)
+    }
+
+    private func failPendingConnections(with error: BLEError) {
+        connectionLock.lock()
+        let connections = Array(activeConnections.values)
+        activeConnections.removeAll()
+        central.onConnect = nil
+        central.onFailToConnect = nil
+        connectionLock.unlock()
+
+        for connection in connections {
+            connection.fail(error)
+        }
+    }
+
+    /// Suspends until Bluetooth powers on, tolerating transient off and resetting states.
+    ///
+    /// Unlike ``waitUntilReady(timeout:)``, `.poweredOff` is not terminal, so automatic reconnect
+    /// can survive the user toggling Bluetooth. An infinite timeout waits until cancellation.
+    func waitForPoweredOn(timeout: TimeInterval) async throws {
+        if central.state == .poweredOn {
+            return
+        }
+        let timeoutNanoseconds = timeoutNanoseconds(timeout)
+        guard timeoutNanoseconds != nil || Self.isUnlimited(timeout) else {
+            throw BLEError.bluetoothReadyTimedOut
+        }
+
+        do {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask { [weak self] in
+                    guard let self else {
+                        throw BLEError.bluetoothUnavailable
+                    }
+                    for await state in self.bluetoothStates {
+                        try Task.checkCancellation()
+                        switch state {
+                        case .poweredOn:
+                            return
+                        case .unauthorized:
+                            throw BLEError.bluetoothUnauthorized
+                        case .unsupported:
+                            throw BLEError.bluetoothUnavailable
+                        case .poweredOff, .unknown, .resetting:
+                            continue
+                        }
+                    }
+                    throw Task.isCancelled
+                        ? BLEError.operationCancelled
+                        : BLEError.bluetoothUnavailable
+                }
+
+                if let timeoutNanoseconds {
+                    group.addTask {
+                        try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                        throw BLEError.bluetoothReadyTimedOut
+                    }
+                }
+
+                defer { group.cancelAll() }
+                _ = try await group.next()
+            }
+        } catch is CancellationError {
+            throw BLEError.operationCancelled
+        }
+    }
+
+    static func isUnlimited(_ timeout: TimeInterval) -> Bool {
+        timeout == .infinity
     }
 
     func startScan(
         id: UUID,
         filter: ScanFilter,
+        options: ScanOptions = .init(),
         continuation: AsyncThrowingStream<BLEDevice, Error>.Continuation
     ) {
         scanLock.lock()
@@ -166,7 +277,8 @@ public final class BLEClient: @unchecked Sendable {
         }
 
         central.scanForPeripherals(
-            withServices: filter.serviceUUIDs.isEmpty ? nil : filter.serviceUUIDs
+            withServices: filter.serviceUUIDs.isEmpty ? nil : filter.serviceUUIDs,
+            options: options
         )
 
         scanLock.unlock()
@@ -199,49 +311,64 @@ public final class BLEClient: @unchecked Sendable {
         peripheral: PeripheralRepresenting,
         options: ConnectionOptions,
         onSuperseded: @escaping @Sendable () -> Void,
+        onBluetoothUnavailable: @escaping @Sendable (BLEError) -> Void,
         onConnect: @escaping @Sendable (PeripheralRepresenting) -> Void,
         onFailToConnect: @escaping @Sendable (PeripheralRepresenting, Error?) -> Void
     ) {
+        let peripheralID = peripheral.identifier
         connectionLock.lock()
-        let previousConnection = activeConnection
-        activeConnection = ActiveConnection(id: id, cancel: onSuperseded)
+        let previousConnection = activeConnections[peripheralID]
+        activeConnections[peripheralID] = ActiveConnection(
+            id: id,
+            cancel: onSuperseded,
+            fail: onBluetoothUnavailable,
+            onConnect: onConnect,
+            onFailToConnect: onFailToConnect
+        )
         central.onConnect = { [weak self] connectedPeripheral in
-            guard self?.isActiveConnection(id: id) == true else { return }
-            onConnect(connectedPeripheral)
+            self?.activeConnection(for: connectedPeripheral.identifier)?.onConnect(connectedPeripheral)
         }
         central.onFailToConnect = { [weak self] failedPeripheral, error in
-            guard self?.isActiveConnection(id: id) == true else { return }
-            onFailToConnect(failedPeripheral, error)
+            self?.activeConnection(for: failedPeripheral.identifier)?.onFailToConnect(failedPeripheral, error)
         }
         connectionLock.unlock()
 
+        // Only an earlier attempt for the same peripheral is superseded.
         previousConnection?.cancel()
 
-        guard isActiveConnection(id: id) else {
+        guard isActiveConnection(id: id, peripheralID: peripheralID) else {
             return
         }
 
         central.connect(peripheral, options: options)
     }
 
-    func isActiveConnection(id: UUID) -> Bool {
+    func isActiveConnection(id: UUID, peripheralID: UUID) -> Bool {
         connectionLock.lock()
         defer { connectionLock.unlock() }
-        return activeConnection?.id == id
+        return activeConnections[peripheralID]?.id == id
     }
 
-    func finishConnection(id: UUID) -> Bool {
+    func finishConnection(id: UUID, peripheralID: UUID) -> Bool {
         connectionLock.lock()
         defer { connectionLock.unlock() }
 
-        guard activeConnection?.id == id else {
+        guard activeConnections[peripheralID]?.id == id else {
             return false
         }
 
-        activeConnection = nil
-        central.onConnect = nil
-        central.onFailToConnect = nil
+        activeConnections[peripheralID] = nil
+        if activeConnections.isEmpty {
+            central.onConnect = nil
+            central.onFailToConnect = nil
+        }
         return true
+    }
+
+    private func activeConnection(for peripheralID: UUID) -> ActiveConnection? {
+        connectionLock.lock()
+        defer { connectionLock.unlock() }
+        return activeConnections[peripheralID]
     }
 
     func timeoutNanoseconds(_ timeout: TimeInterval) -> UInt64? {
